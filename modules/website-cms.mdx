@@ -1,0 +1,166 @@
+---
+title: "Website CMS: Industrial Product Catalog Management"
+sidebarTitle: "Website CMS"
+description: "Manage the technical product catalog published on the marketing website. Organize products into categories, families, and series with specs, images, CAD files, and SEO metadata."
+---
+
+The Website CMS module gives each tenant full control over the industrial product catalog that is embedded in their marketing landing page. Products are organized in a deep five-level hierarchy, enriched with technical specifications, media assets, engineering CAD files, and per-product SEO metadata — all managed from the dashboard without touching code or the file system directly.
+
+## Catalog Hierarchy
+
+The catalog follows a five-level tree. Each level is isolated by `tenant_id` and protected by Row Level Security.
+
+```
+Category
+  └── Subcategory
+        └── Family
+              └── Series
+                    └── Product (SKU)
+```
+
+<CardGroup cols={5}>
+  <Card title="Category" icon="layer-group">
+    Top-level grouping. Example: *Extractores Industriales*.
+  </Card>
+  <Card title="Subcategory" icon="folder-open">
+    Second-level grouping within a category. Example: *Extractores Tipo Hongo*.
+  </Card>
+  <Card title="Family" icon="sitemap">
+    Product line grouping within a subcategory. Example: *Serie Blower Pesado*.
+  </Card>
+  <Card title="Series" icon="list">
+    Variant group within a family. Example: *BLP-2026 Series*.
+  </Card>
+  <Card title="Product (SKU)" icon="barcode">
+    Leaf node. Individual SKU with specs, media, and SEO. Example: `BLP-2026-A`.
+  </Card>
+</CardGroup>
+
+## Product Fields
+
+Each product in the catalog is represented by the `ProductDetail` interface from `src/app/actions/catalog.ts`:
+
+| Field | Type | Description |
+|---|---|---|
+| `productCode` | `string` | Unique SKU code within the tenant |
+| `name` | `string` | Display name of the product |
+| `description` | `string` | Full product description |
+| `status` | `string` | Lifecycle status (e.g., `ACTIVO`, `DESCONTINUADO`) |
+| `specifications` | `Record<string, string>` | Key-value technical specs |
+| `images` | `ProductMedia[]` | Product photos, renders, and engineering drawings |
+| `documents` | `ProductMedia[]` | PDF datasheets, manuals, and certificates |
+| `cadFiles` | `ProductMedia[]` | CAD/engineering files (STEP, DWG, DXF, IGES) |
+| `seo` | `object \| undefined` | Per-product SEO metadata |
+
+### Technical Specifications
+
+Specifications are stored as key-value pairs in the `product_specifications` table. Common keys for industrial ventilation products include:
+
+```
+max_cfm       → "18,500"
+power_kw      → "15"
+noise_db      → "72"
+blade_material → "Aluminio Extruido"
+housing_finish → "Epóxico Anticorrosivo"
+```
+
+### Media Assets (`ProductMedia`)
+
+All media — images, documents, and CAD files — share the same `ProductMedia` shape and are managed through the central Media Manager (`media_assets` table):
+
+```typescript
+interface ProductMedia {
+  id: string;
+  fileName: string;
+  filePath: string;
+  fileSize: number;
+  mimeType: string;
+  altText: string;
+}
+```
+
+Images support `image_type` values of `FOTO`, `RENDER`, or `PLANO`. Documents support `document_type` values of `FICHA_TECNICA`, `MANUAL`, `CERTIFICADO`, or `CATALOGO`. CAD files support `file_type` values of `CAD`, `DWG`, `DXF`, `STEP`, and `IGES`.
+
+### SEO Metadata
+
+Each product can carry an optional SEO record from the `seo_metadata` table:
+
+```typescript
+seo?: {
+  metaTitle: string;
+  metaDescription: string;
+  metaKeywords: string;
+  slug: string;
+}
+```
+
+The `slug` is used to build the canonical public URL for the product on the marketing site.
+
+## Server Actions
+
+All catalog actions are defined in `src/app/actions/catalog.ts` and run under the Supabase Service Role.
+
+### `getIndustrialCatalog`
+
+Returns the full catalog hierarchy for a tenant, from top-level categories down to individual SKUs with all their specifications and media. This is the primary data source for the public marketing website.
+
+```typescript
+getIndustrialCatalog(tenantCode?: string | null): Promise<CatalogCategory[]>
+```
+
+### `saveProduct`
+
+Creates or updates a product and its specification key-value pairs atomically (old specs are deleted and replaced on each update).
+
+```typescript
+saveProduct(
+  tenantCode: string | null,
+  product: {
+    id?: string;
+    productCode: string;
+    name: string;
+    description: string;
+    status: string;
+    seriesId: string;
+    specifications: Record<string, string>;
+  }
+): Promise<{ success: boolean; productId?: string; error?: string }>
+```
+
+### `addProductImage`
+
+Inserts a new record into `media_assets` and creates the join record in `product_images`. Accepts the Supabase Storage file path returned after an upload.
+
+```typescript
+addProductImage(
+  tenantCode: string | null,
+  productId: string,
+  image: {
+    fileName: string;
+    filePath: string;
+    fileSize: number;
+    mimeType: string;
+    altText?: string;
+  }
+): Promise<{ asset: MediaAsset; prodImg: ProductImage }>
+```
+
+### `deleteProduct` / `deleteCategory`
+
+Both use **soft delete** — they set `deleted_at` to the current timestamp rather than removing the row. This preserves referential integrity and the audit trail.
+
+## CatalogSearch Component
+
+The `CatalogSearch.tsx` component provides real-time client-side search across product names and descriptions. It filters the catalog tree returned by `getIndustrialCatalog()` entirely in the browser — no additional server round-trips.
+
+## AI-Assisted Catalog Chat
+
+The optional `catalog-chat.ts` Server Action supports natural language questions about the catalog (e.g., *"Which extractor handles more than 10,000 CFM?"*). This feature requires an active AI provider configured in the Integrations module and is disabled by default.
+
+## Dashboard URL
+
+```
+/dashboard/cms?tenant=<code>
+```
+
+The public catalog is embedded directly in the tenant's marketing landing page and served as a statically-rendered Next.js route for optimal SEO and Core Web Vitals performance.

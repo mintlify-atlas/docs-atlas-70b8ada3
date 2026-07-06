@@ -1,0 +1,86 @@
+---
+title: "Settings Module: Tenant Configuration and Preferences"
+sidebarTitle: "Settings"
+description: "Configure tenant-wide settings including company identity, approval thresholds, notification preferences, document numbering sequences, and user management."
+---
+
+The Settings module is the central control panel for every tenant in B2B Import ERP. All configuration lives in the `tenant_settings` table as typed key-value pairs, organized by module category, and protected by Row Level Security so that one tenant can never read or modify another's settings. Changes take effect immediately without requiring a deployment or server restart.
+
+## Settings Categories
+
+<CardGroup cols={2}>
+  <Card title="Company Identity" icon="building">
+    Core legal and operational identity: commercial name (`nombre_comercial`), legal name (`razon_social`), tax ID (`nit`), address, city, country, main phone, corporate email, and website URL.
+  </Card>
+  <Card title="Branding" icon="palette">
+    Logo URLs for light and dark themes, favicon, PDF header logo, primary and secondary colors, and font configuration. These values are loaded by the White Label system at runtime. See the White Label concept guide for full details.
+  </Card>
+  <Card title="Approval Workflows" icon="check-double">
+    Minimum quote value that triggers a mandatory approval step, multi-level approver chains by role, and escalation rules for time-sensitive approvals.
+  </Card>
+  <Card title="Document Sequences" icon="hashtag">
+    Auto-numbering prefixes and starting numbers for each document type. Examples: `COT-2026-` for quotes, `OT-2026-` for work orders, `FAC-2026-` for invoices. Sequences are tenant-scoped and increment atomically via database triggers.
+  </Card>
+  <Card title="User Management" icon="users">
+    Invite new users by email, assign base roles (Admin, Sales, Operations, Viewer), and configure per-user permission exceptions that override role defaults for specific modules.
+  </Card>
+  <Card title="Notification Rules" icon="bell">
+    Define which system events trigger notifications, which channels to use (in-app, email, WhatsApp, SMS, Telegram), and which recipients receive each event type. All phone numbers and recipient lists are stored in the database — no hardcoded contact details.
+  </Card>
+</CardGroup>
+
+## Configuration Storage Model
+
+Settings are persisted in the `tenant_settings` table under the `EMPRESA`, `LOCALIZACION`, `IDENTIDAD`, `DOCUMENTOS`, `ERP`, `INTEGRACIONES`, and `TELEFONIA` modules. Each row is a typed JSONB key-value pair:
+
+```sql
+-- Example rows from tenant_settings
+module: 'EMPRESA',    config_key: 'nombre_comercial', config_value: '"VentiTech S.A.S."'
+module: 'IDENTIDAD',  config_key: 'color_primario',   config_value: '"#0284c7"'
+module: 'TELEFONIA',  config_key: 'numero_ventas',    config_value: '"+573001112233"'
+```
+
+A database trigger validates the format of each key: color values must match hex, RGB, or HSL patterns; URL values must be absolute URLs, relative paths, or base64 data URIs; phone numbers must conform to E.164 international format.
+
+Sensitive credentials (API keys, integration secrets) are encrypted at rest using `pgp_sym_encrypt` via the `handle_tenant_settings_encryption` trigger when `is_encrypted = true`.
+
+## Branding Versioning
+
+Every time branding settings are saved via `saveTenantBranding()`, the system takes a full snapshot of the active branding configuration and stores it in `tenant_branding_version`. Previous versions can be restored at any point via `restoreBrandingVersion()`.
+
+```
+Version 1 → Version 2 → Version 3 (current)
+                ↑
+         Restore to this version → creates Version 4
+```
+
+<Note>
+  Settings changes take effect immediately for server-rendered pages. Branding values cached in the browser's `localStorage` are refreshed automatically on the next full page load, so users may see the old branding for up to one navigation cycle after a change.
+</Note>
+
+## Advanced Admin (Phase 34)
+
+The following capabilities are planned for Phase 34 and extend the base Settings module:
+
+<CardGroup cols={2}>
+  <Card title="Role Cloning" icon="copy">
+    Duplicate an existing role with all its permission assignments as a starting point for a new custom role.
+  </Card>
+  <Card title="Bulk Permission Editing" icon="table-list">
+    Apply or revoke a permission across multiple users or roles in a single operation.
+  </Card>
+  <Card title="Session Management" icon="shield">
+    View active user sessions, force logout from specific devices, and configure session expiry policies per role.
+  </Card>
+  <Card title="Audit Log Queries" icon="magnifying-glass">
+    Search and export the immutable `audit_log` table with filters by user, entity type, date range, and operation type.
+  </Card>
+</CardGroup>
+
+## Dashboard URL
+
+```
+/dashboard/settings?tenant=<code>
+```
+
+The settings panel is organized into tabs matching the six categories above. Only users with the `ADMIN` role can access the Settings module by default.

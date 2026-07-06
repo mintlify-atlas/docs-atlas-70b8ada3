@@ -1,0 +1,143 @@
+---
+title: "Invoices Module: Billing Generation and Document Management"
+sidebarTitle: "Invoices"
+description: "Generate invoices from approved quotes, attach supporting documents, export to PDF with tenant branding, and track payment status through to reconciliation."
+---
+
+The Invoices module handles the complete billing lifecycle in B2B Import ERP — from drafting a commercial document against an approved quote or closed job, through formal issuance and tax freezing, to full payment reconciliation. Every invoice is permanently traceable to its commercial origin (`quote_id` or `job_id`), and its financial totals are automatically computed from line items via database triggers. Once emitted, an invoice is immutable; corrections require a credit or debit note.
+
+---
+
+## Invoice Lifecycle
+
+Invoices pass through a strict, audit-enforced state machine. Status changes that skip states or reopen final states are blocked at the database level.
+
+```
+BORRADOR → EMITIDA → PARCIALMENTE_PAGADA → PAGADA  (final — immutable)
+              │
+              ↓
+           VENCIDA   (automatic when due_date < CURRENT_DATE)
+              │
+           ANULADA   (requires cancel_reason ≥ 10 chars)
+```
+
+| Status | Description |
+|---|---|
+| `BORRADOR` | Draft invoice; line items can still be added or edited |
+| `EMITIDA` | Formally issued; taxes are frozen into `invoice_taxes`; line items locked |
+| `PARCIALMENTE_PAGADA` | One or more payments applied but balance remains |
+| `PAGADA` | Fully paid; final state — cannot be reopened or modified |
+| `VENCIDA` | `due_date` has passed without full payment |
+| `ANULADA` | Cancelled by finance staff; requires documented reason |
+
+<Warning>
+  Once an invoice leaves `BORRADOR` status it is **immutable** — the `enforce_invoice_immutability` trigger blocks any change to `subtotal`, `discount_amount`, `tax_amount`, or `total_amount`. To correct a posted invoice, issue a credit note (`Nota Crédito`) or debit note (`Nota Débito`) against it.
+</Warning>
+
+---
+
+## Invoice Creation Flow
+
+1. A quote is approved or a job reaches `CERRADO`.
+2. Finance staff opens a new invoice draft in `/dashboard/invoices`.
+3. The invoice is created with `source_type` of `QUOTE` or `JOB` and the corresponding `source_id`. The `quote_id` / `job_id` convenience fields are auto-populated by the `validate_invoice_defaults` trigger.
+4. Line items are added to `invoice_items`; the `trg_invoice_item_totals_after` trigger recalculates `subtotal`, `discount_amount`, `tax_amount`, and `total_amount` on the invoice header automatically after every item change.
+5. When the invoice is transitioned to `EMITIDA`, the trigger consolidates tax detail into the `invoice_taxes` table (frozen IVA at 19% on the taxable base) — this snapshot cannot be altered afterward.
+6. The invoice `due_date` defaults to `invoice_date + 30 days` if not explicitly set.
+
+### Line Item Totals Formula
+
+```
+line_total = (quantity × unit_price) - discount_amount + tax_amount
+```
+
+```
+balance_amount = total_amount - paid_amount   ← generated column; always ≥ 0
+```
+
+---
+
+## Key Fields
+
+The `invoices` table (`20260617000008_invoices_core.sql`):
+
+| Field | Type | Description |
+|---|---|---|
+| `invoice_code` | `varchar(50)` | Auto-generated `FAC-XXXXXX`; unique per tenant |
+| `tenant_id` | `uuid` | Multi-tenant isolation key |
+| `client_id` | `uuid` | FK → `clients`; required |
+| `source_type` | `enum` | `QUOTE`, `JOB`, or `CLIENT` — mandatory traceability |
+| `source_id` | `uuid` | ID of the originating document |
+| `quote_id` | `uuid` | Convenience FK → `quotes` |
+| `job_id` | `uuid` | Convenience FK → `jobs` |
+| `invoice_date` | `date` | Issue date; defaults to `CURRENT_DATE` |
+| `due_date` | `date` | Payment deadline; must be ≥ `invoice_date` |
+| `currency_code` | `varchar(10)` | Default `COP` |
+| `subtotal` | `decimal(18,2)` | Sum of line item base amounts |
+| `discount_amount` | `decimal(18,2)` | Total discount across all lines |
+| `tax_amount` | `decimal(18,2)` | Total tax (IVA) across all lines |
+| `total_amount` | `decimal(18,2)` | Net total payable |
+| `paid_amount` | `decimal(18,2)` | Cumulative applied payments |
+| `balance_amount` | `decimal(18,2)` | Generated: `total_amount - paid_amount` |
+| `status` | `enum` | Current lifecycle state |
+| `payment_link` | `text` | Wompi checkout URL once payment is initiated |
+| `payment_status` | `varchar(100)` | Gateway payment status (`PENDING`, `APPROVED`, etc.) |
+| `payment_provider` | `varchar(100)` | e.g., `WOMPI` |
+| `cancel_reason` | `text` | Required (≥ 10 chars) when setting `ANULADA` |
+
+---
+
+## PDF Export
+
+Invoices can be exported to PDF for delivery to clients. The generated PDF includes:
+
+- **Tenant branding**: logo, company name, address, and NIT (tax identification number) pulled from tenant configuration.
+- **Client details**: legal name, NIT, billing address, and contact.
+- **Line items table**: description, quantity, unit price, discount, tax, and line total for each row.
+- **Totals section**: subtotal, total discount, IVA (tax), and grand total.
+- **Payment instructions**: bank transfer details or the Wompi payment link if one has been generated.
+- **Invoice metadata**: `invoice_code`, issue date, due date, and currency.
+
+---
+
+## Approval Requirement
+
+Invoices above configurable monetary thresholds require an explicit approval step before they can be transitioned from `BORRADOR` to `EMITIDA`. The approval flow is managed by the Approvals module using the same `pending → approved / rejected` cycle used for quotes and contracts. Threshold values are stored in `system_settings` per tenant and are fully configurable by administrators.
+
+---
+
+## RBAC Permissions
+
+| Permission | Roles |
+|---|---|
+| `invoices.create` (draft) | `AUXILIAR_FINANZAS`, `JEFE_FINANZAS`, `GERENTE`, `GERENTE_GENERAL` |
+| `invoices.emit` (BORRADOR → EMITIDA) | `JEFE_FINANZAS`, `GERENTE`, `GERENTE_GENERAL` |
+| `invoices.cancel` (→ ANULADA) | `JEFE_FINANZAS`, `GERENTE`, `GERENTE_GENERAL` |
+| `invoices.view` | All internal roles; `AUDITOR` (including soft-deleted); `CLIENTE` (own invoices via portal) |
+| `payments.view` | Adds `DIR_COMERCIAL`, `AUDITOR`, `CLIENTE` |
+
+All `invoices`, `invoice_items`, and `invoice_taxes` rows have RLS enabled, scoped to `tenant_id`. Physical deletion is blocked — soft delete is mandatory.
+
+---
+
+## Financial KPIs
+
+The invoices table feeds the following key financial metrics:
+
+| KPI | Formula |
+|---|---|
+| Total Invoiced | `SUM(invoices.total_amount)` |
+| Outstanding Portfolio | `SUM(invoices.balance_amount)` |
+| Overdue Invoices | `COUNT(*) WHERE status = 'VENCIDA'` |
+
+---
+
+## Dashboard URL
+
+```
+/dashboard/invoices?tenant=<code>
+```
+
+<Tip>
+  To collect payment on an emitted invoice, use the Wompi gateway integration in the [Payments module](/modules/payments). Once a checkout session is created, the `payment_link` field on the invoice is populated and can be sent directly to the client.
+</Tip>

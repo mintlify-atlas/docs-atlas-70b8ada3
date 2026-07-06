@@ -1,0 +1,161 @@
+---
+title: "Approvals Module: Multi-Level Authorization Workflows"
+sidebarTitle: "Approvals"
+description: "Configure multi-step approval workflows for quotes, invoices, and contracts. Approvers can approve, reject, or request adjustments with mandatory comments."
+---
+
+The Approvals module provides a configurable multi-level authorization engine that governs commercial decisions across B2B Import ERP. Rather than hard-coding who approves what, the system lets each tenant define reusable approval flows (sequential, parallel, or mixed), attach amount-based rules to business objects, and route incoming approval requests to the right people automatically. Every decision — regardless of outcome — is recorded immutably in both `approval_request_steps` and the central `audit_log`.
+
+---
+
+## What Can Be Approved
+
+The approval engine currently supports the following object types, as defined by the `entity_type` CHECK constraint in `approval_rules` and `approval_requests`:
+
+<CardGroup cols={3}>
+  <Card title="Quotations" icon="file-invoice-dollar">
+    The primary use case. Quotes entering `EN_REVISION` automatically trigger approval routing based on the configured amount rules.
+  </Card>
+  <Card title="Invoices" icon="receipt">
+    Invoice approval workflows for billing authorization before issuance to clients.
+  </Card>
+  <Card title="Contracts" icon="file-contract">
+    Contract sign-off workflows for formal service agreements.
+  </Card>
+</CardGroup>
+
+<Tip>
+Approval workflows are fully configurable per tenant in **Settings → Approval Flows**. You can create as many flows as needed, each with different step sequences, assigned roles or users, and amount thresholds.
+</Tip>
+
+---
+
+## Approval States
+
+Each `approval_requests` record and each `approval_request_steps` record tracks its own state independently:
+
+```
+PENDIENTE
+   │
+   ├──► APROBADA            (all required steps approved)
+   ├──► RECHAZADA           (any required step rejected)
+   └──► AJUSTES_SOLICITADOS (approver requests changes)
+          │
+          └──► PENDIENTE    (request reset after adjustments applied)
+```
+
+Additionally, a request can be cancelled (`CANCELADA`) by an administrator before it reaches a final decision.
+
+| State | Description |
+|---|---|
+| `PENDIENTE` | Awaiting action from the assigned approver |
+| `EN_PROCESO` | At least one step approved; remaining steps still pending |
+| `APROBADA` | All required steps approved; linked object updated accordingly |
+| `RECHAZADA` | A required step was rejected; linked object set to `RECHAZADA` |
+| `AJUSTES_SOLICITADOS` | Approver requested changes; linked quote returned to `EN_REVISION` |
+| `CANCELADA` | Request cancelled by administrator |
+
+---
+
+## Approval Flow
+
+The following sequence describes how a Quote triggers and moves through the approval engine:
+
+1. **Commercial executive** moves the quote from `BORRADOR` → `EN_REVISION`.
+2. The `route_quote_approvals` trigger fires (`BEFORE UPDATE OF status` on `quotes`) and:
+   - Searches `approval_rules` for an active rule matching `entity_type = 'QUOTE'` and the quote's `total_amount`.
+   - If a rule with a `flow_id` is found: creates an `approval_requests` record (`PENDIENTE`) and instantiates one `approval_request_steps` row per step in the flow.
+   - If no rule is found: escalates automatically to the `GERENTE_GENERAL` role with a single-step request.
+   - If `flow_id = NULL` on the rule: auto-approves the quote immediately.
+3. **Approver** calls `resolve_approval_step(requestId, stepOrder, decision, comments)` with a mandatory comment.
+4. The function validates the approver's identity and role, checks sequential ordering (in `SECUENCIAL` flow type), updates the step, and evaluates whether all required steps have been resolved.
+5. If all required steps are `APROBADA`: the `approval_requests` status becomes `APROBADA` and the quote status is set to `APROBADA`.
+6. If any step is `RECHAZADA`: the request and the quote both become `RECHAZADA`.
+7. If a step is `AJUSTES_SOLICITADOS`: the request status becomes `AJUSTES_SOLICITADOS` and the quote is returned to `EN_REVISION` for the commercial team to revise.
+
+<Note>
+While an approval request is in `PENDIENTE` or `EN_PROCESO` state, the quote and all of its line items are **locked** against modification. Attempting to edit them raises a database-level exception.
+</Note>
+
+---
+
+## Multi-Level Approvals
+
+Workflows can chain any number of approvers. Each step in an `approval_flow` is assigned either to a **role** (`role_id`) or a specific **user** (`user_id`) — never both. The `step_order` determines the sequence.
+
+| Flow Type | Behaviour |
+|---|---|
+| `SECUENCIAL` | Steps must be resolved in order; step N cannot be approved until step N-1 is `APROBADA` |
+| `PARALELA` | All steps can be resolved simultaneously; the request resolves when all required steps complete |
+| `MIXTA` | A combination of sequential and parallel steps, defined per flow configuration |
+
+For a quote to reach `APROBADA` status, **all steps marked `required = true`** must be individually approved. Optional steps (`required = false`) do not block final resolution.
+
+---
+
+## `approval_requests` Table — Key Columns
+
+The following columns on the `approval_requests` table carry the most operationally significant information:
+
+| Column | Type | Description |
+|---|---|---|
+| `request_code` | `varchar(50)` | Auto-generated code `APR-000001`; unique per tenant |
+| `entity_type` | `varchar(100)` | Object being approved: `QUOTE`, `INVOICE`, `CONTRACT` |
+| `entity_id` | `uuid` | FK to the object's primary key |
+| `flow_id` | `uuid` | FK to `approval_flows`; `NULL` for escalation requests |
+| `requested_by` | `uuid` | User who triggered the approval (e.g. the commercial executive) |
+| `requested_at` | `timestamp` | When the approval was requested |
+| `status` | `enum` | Current state of the request (see table above) |
+| `resolved_by` | `uuid` | User who made the final decision |
+| `resolved_at` | `timestamp` | Timestamp of the final decision |
+| `comments` | `text` | Final decision comment (populated by `resolve_approval_step`) |
+
+Each individual step decision is recorded in `approval_request_steps`, including the step-level `comments`, `resolved_by`, and `resolved_at`.
+
+---
+
+## RBAC — Role-Based Access
+
+| Action | Roles |
+|---|---|
+| **Configure flows & rules** | `ADMINISTRADOR`, `GERENTE_GENERAL`, `SUPER_ADMIN` |
+| **Approve / reject quotes** (`quotes.approve`) | `GERENTE_GENERAL`, `DIRECTOR_COMERCIAL` |
+| **View approval requests** | All authenticated tenant users |
+| **Cancel an approval request** | `ADMINISTRADOR`, `GERENTE_GENERAL`, `SUPER_ADMIN` |
+
+<Warning>
+The `enforce_approval_config_permissions` trigger blocks `INSERT`, `UPDATE`, and `DELETE` on `approval_flows`, `approval_steps`, and `approval_rules` for any user without the `ADMINISTRADOR` or `GERENTE_GENERAL` role. Platform Super Admins bypass this check.
+</Warning>
+
+---
+
+## Audit Trail
+
+Every approval decision is permanently recorded across three layers:
+
+1. **`approval_request_steps`** — the per-step decision record with `resolved_by`, `resolved_at`, and the full `comments` text.
+2. **`business_events`** — semantic events emitted by `resolve_approval_step()` and `dispatch_approval_events()`:
+
+| Event Code | Emitted When |
+|---|---|
+| `APPROVAL_REQUEST_CREATED` | New approval request instantiated |
+| `APPROVAL_REQUEST_APPROVED` | A step is approved |
+| `APPROVAL_REQUEST_REJECTED` | A step is rejected |
+| `APPROVAL_REQUEST_ADJUSTMENTS_REQUESTED` | Approver requests changes |
+| `APPROVAL_REQUEST_CANCELLED` | Request cancelled by administrator |
+| `APPROVAL_FLOW_CREATED` | A new approval flow is configured |
+| `APPROVAL_RULE_CREATED` | A new amount rule is added |
+
+3. **`audit_log`** — the `process_audit_log()` trigger fires on every `INSERT`, `UPDATE`, or `DELETE` across all approval tables, capturing the full before/after JSONB diff.
+
+Physical deletion of any approval entity is blocked by `block_physical_approval_delete`. All records are permanent and can only be logically deactivated via soft-delete.
+
+---
+
+## Dashboard
+
+Navigate to pending approvals for your tenant:
+
+```
+/dashboard/approvals?tenant=<code>
+```

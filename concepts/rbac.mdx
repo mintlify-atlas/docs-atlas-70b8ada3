@@ -1,0 +1,147 @@
+---
+title: "Role-Based Access Control: 9 Roles and Permission Matrix"
+sidebarTitle: "RBAC"
+description: "B2B Import ERP enforces access through 9 predefined roles. Permission checks cascade from role assignment through user exceptions and site-level restrictions."
+---
+
+B2B Import ERP ships with nine predefined system roles that cover every actor in a B2B industrial services operation — from platform-wide administrators down to end-clients browsing their own portal. Roles are assigned per user at the tenant level, and access is resolved at runtime through a three-stage cascade that accounts for per-user exceptions and multi-site restrictions. No user gains access to a module simply by being logged in; every action is gated by an explicit permission code tied to the user's role.
+
+---
+
+## The 9 Official Roles
+
+<CardGroup cols={2}>
+  <Card title="SUPER_ADMIN" icon="shield-halved">
+    Platform-wide administration with no tenant affiliation. Has full bypass of all RLS policies (`is_platform_user = true`, `tenant_id = NULL`). Manages tenants, global roles, platform permissions, and cross-tenant audit logs.
+  </Card>
+  <Card title="ADMIN_EMPRESA" icon="building">
+    Full control within a single tenant. Can create and edit users, assign roles, manage tenant settings (including white-label), and access all operational and financial modules within their company.
+  </Card>
+  <Card title="GERENTE_GENERAL" icon="chart-line">
+    Multi-site visibility across the entire tenant. Can approve quotes and jobs, view all commercial and operational data across every site, and access tenant-level audit logs. Has cross-site access by default.
+  </Card>
+  <Card title="DIR_COMERCIAL" icon="handshake">
+    Commercial pipeline management. Creates and edits clients and requirements, manages and approves quotes, and has cross-site read access to all commercial data. Cannot manage operational or financial records.
+  </Card>
+  <Card title="EJECUTIVO_COM" icon="user-tie">
+    Day-to-day commercial operations. Creates clients, requirements, and quotes. Can upload documents and view inventory, but cannot approve quotes or create jobs.
+  </Card>
+  <Card title="DIR_OPERACIONES" icon="gears">
+    Full control over the operations domain. Creates and manages jobs, manages inventory items and movements, closes jobs, and has read access to commercial records.
+  </Card>
+  <Card title="TECNICO_CAMPO" icon="screwdriver-wrench">
+    Field execution. Executes assigned jobs, records work activities, and logs inventory movements. Read-only access to clients and jobs assigned to them. Cannot create jobs, approve quotes, or access financial data.
+  </Card>
+  <Card title="AUDITOR" icon="magnifying-glass">
+    Read-only access to all records within the tenant, including the full audit log (`audit.view_tenant`). Cannot create, edit, or delete any record. Intended for compliance and internal control functions.
+  </Card>
+  <Card title="CLIENTE" icon="person">
+    Client portal access. Can view their own quotes, invoices, and shared documents. Can upload documents related to their own requirements. Has no access to operational, inventory, or administrative data.
+  </Card>
+</CardGroup>
+
+<Tip>
+  `GERENTE_GENERAL` and `DIR_COMERCIAL` have **cross-site visibility** by default. The permission resolution engine skips the per-site `site_id` restriction for these two roles, so they see data from all sites within their tenant without any extra configuration.
+</Tip>
+
+---
+
+## Permission Matrix
+
+The table below covers the key permission codes across the main modules. **Sí** = granted by default for that role; **No** = not granted (may be added via `user_permissions` override).
+
+| Module / Permission       | SUPER_ADMIN | ADMIN_EMPRESA | GERENTE_GENERAL | DIR_COMERCIAL | EJECUTIVO_COM | DIR_OPERACIONES | TECNICO_CAMPO | AUDITOR | CLIENTE |
+| :------------------------ | :---------: | :-----------: | :-------------: | :-----------: | :-----------: | :-------------: | :-----------: | :-----: | :-----: |
+| **Platform / Tenants**    |             |               |                 |               |               |                 |               |         |         |
+| `tenants.create`          | Sí          | No            | No              | No            | No            | No              | No            | No      | No      |
+| `tenants.view`            | Sí          | No            | No              | No            | No            | No              | No            | No      | No      |
+| `tenants.settings`        | Sí          | Sí            | No              | No            | No            | No              | No            | No      | No      |
+| **Users & Roles**         |             |               |                 |               |               |                 |               |         |         |
+| `users.create`            | Sí          | Sí            | No              | No            | No            | No              | No            | No      | No      |
+| `users.edit`              | Sí          | Sí            | No              | No            | No            | No              | No            | No      | No      |
+| `users.permissions`       | Sí          | Sí            | No              | No            | No            | No              | No            | No      | No      |
+| **Commercial / CRM**      |             |               |                 |               |               |                 |               |         |         |
+| `clients.create`          | No          | Sí            | Sí              | Sí            | Sí            | No              | No            | No      | No      |
+| `clients.edit`            | No          | Sí            | Sí              | Sí            | Sí            | No              | No            | No      | No      |
+| `clients.view`            | No          | Sí            | Sí              | Sí            | Sí            | Sí              | Sí            | Sí      | No      |
+| `quotes.create`           | No          | Sí            | Sí              | Sí            | Sí            | No              | No            | No      | No      |
+| `quotes.approve`          | No          | No            | Sí              | Sí            | No            | No              | No            | No      | No      |
+| `quotes.view`             | No          | Sí            | Sí              | Sí            | Sí            | Sí              | No            | Sí      | Sí      |
+| **Operations**            |             |               |                 |               |               |                 |               |         |         |
+| `jobs.create`             | No          | Sí            | Sí              | No            | No            | Sí              | No            | No      | No      |
+| `jobs.manage`             | No          | Sí            | Sí              | No            | No            | Sí              | Sí            | No      | No      |
+| `jobs.close`              | No          | No            | Sí              | No            | No            | Sí              | No            | No      | No      |
+| `documents.upload`        | No          | Sí            | Sí              | Sí            | Sí            | Sí              | Sí            | No      | Sí      |
+| `documents.view`          | No          | Sí            | Sí              | Sí            | Sí            | Sí              | Sí            | Sí      | Sí      |
+| **Inventory**             |             |               |                 |               |               |                 |               |         |         |
+| `items.manage`            | No          | Sí            | No              | No            | No            | Sí              | No            | No      | No      |
+| `inventory.movement`      | No          | Sí            | No              | No            | No            | Sí              | Sí            | No      | No      |
+| `inventory.view`          | No          | Sí            | Sí              | Sí            | Sí            | Sí              | Sí            | Sí      | No      |
+| **Finance**               |             |               |                 |               |               |                 |               |         |         |
+| `invoices.create`         | No          | Sí            | Sí              | No            | No            | No              | No            | No      | No      |
+| `payments.confirm`        | No          | Sí            | Sí              | No            | No            | No              | No            | No      | No      |
+| `payments.view`           | No          | Sí            | Sí              | Sí            | No            | No              | No            | Sí      | Sí      |
+| **Audit**                 |             |               |                 |               |               |                 |               |         |         |
+| `audit.view_global`       | Sí          | No            | No              | No            | No            | No              | No            | No      | No      |
+| `audit.view_tenant`       | No          | Sí            | Sí              | No            | No            | No              | No            | Sí      | No      |
+
+---
+
+## Permission Resolution Cascade
+
+At runtime, every permission check follows a deterministic three-stage cascade:
+
+```
+[1. Role Permissions]
+     — Does the user's assigned role include this permission_code?
+          ↓
+[2. user_permissions table (per-user overrides)]
+     — Is there a row for (user_id, permission_id)?
+       • granted = true  → access granted regardless of role
+       • granted = false → access denied regardless of role
+          ↓
+[3. site_id restriction (single-site users)]
+     — Does the resource belong to the user's assigned site?
+       • Managers / Directors → cross-site, skip this check
+       • All other roles     → restricted to their own site_id
+          ↓
+[Access Granted / Denied]
+```
+
+Stages are evaluated in order and the first conclusive result wins. If stage 2 produces an explicit `granted = false`, the cascade stops — even a role that would normally permit the action cannot override it.
+
+---
+
+## User Exceptions (`user_permissions`)
+
+The `user_permissions` table stores per-user permission overrides that augment or restrict what a role alone would grant:
+
+```sql
+CREATE TABLE user_permissions (
+    id           uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    tenant_id    uuid REFERENCES tenants(id) ON DELETE CASCADE,
+    user_id      uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    permission_id uuid NOT NULL REFERENCES permissions(id) ON DELETE CASCADE,
+    granted      boolean NOT NULL DEFAULT true,
+    assigned_at  timestamp NOT NULL DEFAULT NOW(),
+    assigned_by  uuid REFERENCES users(id) ON DELETE SET NULL,
+    CONSTRAINT unique_user_permission UNIQUE (user_id, permission_id)
+);
+```
+
+Typical use cases:
+
+- **Grant**: give a specific `EJECUTIVO_COM` the `quotes.approve` permission without promoting them to `DIR_COMERCIAL`.
+- **Revoke**: remove `inventory.view` from a `DIR_OPERACIONES` user who should not see stock data in a particular deployment.
+
+Only `SUPER_ADMIN` and `ADMIN_EMPRESA` can manage `user_permissions` rows (`users.permissions` gate).
+
+---
+
+## Full System Role Catalogue
+
+The platform defines 26 role codes in total (used for custom role creation and fine-grained staffing hierarchies). The nine documented above are the **active roles** shipped by default. The complete catalogue includes:
+
+`SUPER_ADMIN` · `ADMIN_EMPRESA` · `GERENTE_GENERAL` · `DIRECTOR_OPERACIONES` · `DIRECTOR_COMERCIAL` · `DIRECTOR_FINANCIERO` · `JEFE_PROYECTOS` · `JEFE_MANTENIMIENTO` · `JEFE_INVENTARIO` · `JEFE_COMPRAS` · `JEFE_CARTERA` · `JEFE_CALIDAD` · `EJECUTIVO_COMERCIAL` · `INGENIERO_COMERCIAL` · `INGENIERO_PROYECTOS` · `COORDINADOR_OPERACIONES` · `TECNICO_CAMPO` · `ALMACENISTA` · `AUXILIAR_INVENTARIO` · `AUXILIAR_CARTERA` · `AUXILIAR_ADMINISTRATIVO` · `CONTADOR` · `AUDITOR` · `CLIENTE` · `PROVEEDOR` · `INVITADO`
+
+Custom roles created within a tenant have a non-`NULL` `tenant_id` in the `roles` table. System-level global roles carry `tenant_id = NULL`.

@@ -1,0 +1,234 @@
+---
+title: "State Machines: Entity Lifecycle and Transition Rules"
+sidebarTitle: "State Machines"
+description: "Every entity in B2B Import ERP follows a strict state machine. Transitions are validated by the domain layer, audited, and guarded by RBAC permissions."
+---
+
+Every major entity in B2B Import ERP — clients, requirements, quotes, jobs, invoices, and more — has a formally defined lifecycle expressed as a state machine. Instead of allowing free-form status updates, the platform only permits transitions that are explicitly declared in the Master State & Transition Matrix. This design eliminates invalid data states, makes the system auditable, and provides a single authoritative source of truth for business process enforcement.
+
+<Note>
+  All state names are in **Spanish** because B2B Import ERP is built for Spanish-speaking markets in Latin America. State codes stored in the database match the Spanish names exactly (e.g., `"Prospecto"`, `"En Ejecución"`, `"Borrador"`).
+</Note>
+
+---
+
+## Global Rule
+
+> **No state change may ever be applied directly in the database.** All transitions must be executed through domain services.
+
+Every state transition — regardless of entity type — must:
+
+1. **Validate permissions** — the acting user must hold the required RBAC permission for the transition (e.g., `quotes.approve` to move a quote from `Enviada` → `Aprobada`).
+2. **Record an audit log entry** — the `audit_log` table captures `old_values`, `new_values`, `user_id`, `tenant_id`, `ip_address`, and `user_agent`.
+3. **Emit a domain event** — downstream listeners (notifications, recalculations, integrations) react to the event asynchronously.
+4. **Generate alerts if applicable** — certain transitions trigger `ALERTA` records (e.g., a quote reaching `Vencida`, a job moving to `Suspendido`).
+5. **Update related dates** — timestamps such as `started_at`, `completed_at`, and `closed_at` are set automatically by the transition service, not by the caller.
+
+---
+
+## Client States
+
+Clients progress from initial prospecting through active engagement to eventual archival.
+
+```
+Prospecto ──→ Activo ──→ Inactivo ──→ Archivado
+                │              ↑
+                └──→ Bloqueado ─┘
+                       │
+                       └──→ Activo  (unblock)
+```
+
+| Transition              | Allowed | Notes                                    |
+| :---------------------- | :-----: | :--------------------------------------- |
+| Prospecto → Activo      | ✅      | First commercial engagement confirmed    |
+| Activo → Inactivo       | ✅      | No recent activity                       |
+| Activo → Bloqueado      | ✅      | Credit or compliance hold                |
+| Bloqueado → Activo      | ✅      | Hold resolved                            |
+| Inactivo → Activo       | ✅      | Re-engagement                            |
+| Inactivo → Archivado    | ✅      | Long-term dormancy                       |
+| Prospecto → Archivado   | ❌      | Not permitted — must activate first      |
+| Bloqueado → Archivado   | ❌      | Not permitted — must unblock first       |
+
+---
+
+## Requirement States
+
+Requirements follow the full commercial-to-operational pipeline. Cancellation is an exit from any state.
+
+```
+Registrado
+    ↓
+Diagnóstico          ← requires: assigned responsible user
+    ↓
+Visita Técnica       ← requires: diagnosis record present
+    ↓
+Cotización           ← requires: sufficient technical information
+    ↓
+Aprobado             ← requires: approved quote linked
+    ↓
+En Ejecución         ← requires: job (Trabajo) created
+    ↓
+Cerrado
+
+Any state ──→ Cancelado
+```
+
+| Transition                        | Validation Condition                        |
+| :-------------------------------- | :------------------------------------------ |
+| Registrado → Diagnóstico          | Responsible user assigned                   |
+| Diagnóstico → Visita Técnica      | Diagnosis record exists                     |
+| Visita Técnica → Cotización       | Sufficient technical information captured   |
+| Cotización → Aprobado             | An approved quote (`Aprobada`) is linked     |
+| Aprobado → En Ejecución           | A job (`Trabajo`) has been created          |
+| Any → Cancelado                   | No preconditions — available at any stage   |
+
+---
+
+## Quote States
+
+Quotes move from drafting through review and dispatch to a final resolution state. Once resolved, they are immutable.
+
+```
+Borrador ──→ En Revisión ──→ Enviada ──→ Aprobada  (final)
+   │                              │
+   │                              ├──→ Rechazada  (final)
+   │                              └──→ Vencida    (final)
+   │
+   └──→ Cancelada  (final)
+```
+
+| State       | Terminal | Notes                                              |
+| :---------- | :------: | :------------------------------------------------- |
+| Borrador    | No       | Internal draft, not yet submitted for review       |
+| En Revisión | No       | Under internal approval review                     |
+| Enviada     | No       | Sent to client, awaiting response                  |
+| Aprobada    | **Yes**  | Client accepted — triggers requirement advancement |
+| Rechazada   | **Yes**  | Client declined                                    |
+| Vencida     | **Yes**  | Passed expiry date without a response              |
+| Cancelada   | **Yes**  | Withdrawn before dispatch                          |
+
+---
+
+## Job (Trabajo) States
+
+Jobs represent the operational execution of an approved requirement. Suspension and re-activation are permitted mid-execution.
+
+```
+Pendiente ──→ Programado ──→ En Ejecución ──→ Finalizado ──→ Entregado ──→ Cerrado
+                                   │
+                                   ├──→ Suspendido ──→ En Ejecución  (resume)
+                                   │
+Pendiente / Programado ────────────└──→ Cancelado
+```
+
+| Transition                    | Validation Condition                            |
+| :---------------------------- | :---------------------------------------------- |
+| Pendiente → Programado        | Responsible user assigned; scheduled date set   |
+| Programado → En Ejecución     | Actual start date (`inicio_real`) recorded      |
+| En Ejecución → Suspendido     | No precondition — available at any time         |
+| Suspendido → En Ejecución     | No precondition — resume any time               |
+| En Ejecución → Finalizado     | All activities are in `Completada` state        |
+| Finalizado → Entregado        | Delivery record (`Acta Entrega`) uploaded       |
+| Entregado → Cerrado           | No pending activities remain                    |
+| Pendiente → Cancelado         | Available before scheduling                     |
+| Programado → Cancelado        | Available before execution starts               |
+
+---
+
+## Activity States
+
+Individual activities within a job follow a parallel lifecycle to the job itself.
+
+```
+Pendiente ──→ Programada ──→ En Ejecución ──→ Completada
+                                   │
+                                   └──→ Suspendida ──→ En Ejecución  (resume)
+
+Pendiente ──→ Cancelada
+```
+
+---
+
+## Invoice States
+
+Invoices move from pending through payment to either a paid or annulled terminal state. Partial payments are tracked as an intermediate state.
+
+```
+Pendiente ──→ ParcialmentePagada ──→ Pagada  (final)
+    │               │
+    │               └──→ Vencida
+    │
+    └──→ Vencida
+    │
+    └──→ Anulada  (final)
+```
+
+| State                | Terminal | Notes                                      |
+| :------------------- | :------: | :----------------------------------------- |
+| Pendiente            | No       | Issued but no payment received             |
+| ParcialmentePagada   | No       | One or more partial payments recorded      |
+| Pagada               | **Yes**  | Fully settled — no further changes allowed |
+| Vencida              | No       | Past due date without full payment         |
+| Anulada              | **Yes**  | Voided before full payment                 |
+
+---
+
+## Additional Entity State Machines
+
+<CardGroup cols={2}>
+  <Card title="Approval (Aprobación)" icon="circle-check">
+    `Pendiente` → `Aprobada` or `Rechazada` or `AjustesSolicitados` → back to `Pendiente` · Also `Cancelada`.
+  </Card>
+  <Card title="Document (Documento)" icon="file">
+    `Borrador` → `Publicado` → `Obsoleto` → `Archivado`. Physical deletion is **never permitted**.
+  </Card>
+  <Card title="Payment (Pago)" icon="credit-card">
+    `Registrado` → `Confirmado` or `Anulado`. Terminal after confirmation or annulment.
+  </Card>
+  <Card title="Warranty (Garantía)" icon="shield-check">
+    `Activa` → `Ejecutada` → `Cerrada`. Also `Activa` → `Vencida` or `Anulada`.
+  </Card>
+  <Card title="Inventory Movement" icon="box">
+    `Registrado` → `Aplicado` or `Anulado`. Terminal after application or annulment.
+  </Card>
+  <Card title="Alert (Alerta)" icon="bell">
+    `Pendiente` → `Leída` → `Archivada`. Forward-only, no rollback.
+  </Card>
+</CardGroup>
+
+---
+
+## What Happens on Every Transition
+
+The domain service that executes a transition always performs the following sequence atomically:
+
+```ts
+// Pseudo-code — domain transition service pattern
+async function transitionState(entityId, targetState, actingUserId) {
+  // 1. Load current entity and validate the transition is allowed
+  const entity = await repo.findById(entityId);
+  assertTransitionAllowed(entity.state, targetState);
+
+  // 2. Check RBAC permission for this specific transition
+  await assertPermission(actingUserId, requiredPermission(targetState));
+
+  // 3. Validate domain preconditions (responsible user, linked records, etc.)
+  await validatePreconditions(entity, targetState);
+
+  // 4. Apply the state change and update related timestamps
+  await repo.updateState(entityId, targetState);
+
+  // 5. Write audit log entry
+  await auditLog.record({ entityId, from: entity.state, to: targetState, actingUserId });
+
+  // 6. Emit domain event for downstream consumers
+  await eventBus.emit(`${entity.type}.state_changed`, { entityId, targetState });
+
+  // 7. Create alert records if the transition triggers one
+  await alertService.maybeCreate(entity, targetState);
+}
+```
+
+<Warning>
+  If a transition is not defined in the Master State & Transition Matrix, it must **not** be implemented, inferred, or invented. Stop and request a formal definition before writing any code.
+</Warning>

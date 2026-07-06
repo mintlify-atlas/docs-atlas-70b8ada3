@@ -1,0 +1,154 @@
+---
+title: "Warranties Module: Post-Sale Service and Claim Management"
+sidebarTitle: "Warranties"
+description: "Track warranty periods for completed jobs, manage client claims, schedule warranty interventions, and record resolution outcomes with full audit history."
+---
+
+The Warranties module closes the post-sale loop in B2B Import ERP. When a field service job is closed, the system automatically creates a warranty record that governs the coverage period for that work. Clients can view their active warranties through the client portal, submit claims, and track resolution. Internally, each claim spawns an **intervention** — a structured work order that follows the same execution lifecycle as a standard job.
+
+---
+
+## Automatic Warranty Creation
+
+Warranties are **never created manually**. The `generate_warranty_on_job_close` database trigger fires automatically after a job transitions to `CERRADO`:
+
+1. The trigger reads `actual_end_date` (or falls back to `CURRENT_DATE`) as the warranty start date.
+2. It adds 12 months to compute `end_date`.
+3. A new `warranties` row is inserted with `status = 'ACTIVA'`, linked to the closed job and its client.
+4. The `warranty_code` is auto-generated as `GAR-XXXXXX`.
+
+```sql
+-- Simplified trigger logic
+INSERT INTO warranties (
+  tenant_id, client_id, job_id,
+  start_date, end_date,
+  warranty_type, coverage_description, status
+) VALUES (
+  NEW.tenant_id, NEW.client_id, NEW.id,
+  COALESCE(NEW.actual_end_date::date, CURRENT_DATE),
+  COALESCE(NEW.actual_end_date::date, CURRENT_DATE) + INTERVAL '12 months',
+  'ESTANDAR',
+  'Garantía generada automáticamente por cierre de Job: ' || NEW.job_code,
+  'ACTIVA'
+);
+```
+
+<Note>
+  Only jobs in the `CERRADO` state generate warranties. Jobs that reach `CANCELADO` do not produce a warranty record.
+</Note>
+
+---
+
+## Warranty Lifecycle
+
+The `warranties` table enforces a strict state machine. The `handle_warranty_vencida` trigger also auto-advances a warranty from `ACTIVA` to `VENCIDA` in real time when `CURRENT_DATE > end_date`, even without an explicit status update call.
+
+```
+ACTIVA ──────────────────────────────────→ VENCIDA   (automatic when past end_date)
+  │                                            │
+  ↓                                            │
+EJECUTADA  (open intervention exists)          │
+  │                                            │
+  ↓  (all interventions resolved)              │
+ACTIVA     (reverts if no open interventions)  │
+  │                                            │
+  ↓                                            │
+CERRADA    (manually closed by operations)     │
+  │                                            │
+ANULADA    (cancel_reason ≥ 10 chars required) ←─
+```
+
+| Status | Description |
+|---|---|
+| `ACTIVA` | Warranty is in its coverage period; interventions may be registered |
+| `VENCIDA` | Coverage period has expired; no new interventions allowed |
+| `EJECUTADA` | At least one open intervention (`REGISTRADA` or `EN_PROCESO`) exists |
+| `CERRADA` | Warranty formally closed by the operations team |
+| `ANULADA` | Administratively cancelled; requires a documented reason |
+
+<Warning>
+  Registering or modifying an intervention against a warranty in `VENCIDA`, `ANULADA`, or `CERRADA` state is blocked at the database level and raises an exception. The check also fires in real time — if a warranty just expired, it transitions to `VENCIDA` before the intervention attempt is evaluated.
+</Warning>
+
+---
+
+## Key Fields
+
+### `warranties` table
+
+| Field | Type | Description |
+|---|---|---|
+| `warranty_code` | `varchar(50)` | Auto-generated `GAR-XXXXXX`; unique per tenant |
+| `client_id` | `uuid` | FK → `clients`; the covered customer |
+| `job_id` | `uuid` | FK → `jobs`; the originating closed job; required |
+| `start_date` | `date` | Coverage start; set from job's `actual_end_date` |
+| `end_date` | `date` | Coverage end; must be ≥ `start_date` |
+| `warranty_type` | `varchar(100)` | Default `ESTANDAR`; configurable per tenant |
+| `coverage_description` | `text` | Free-text description of what is covered |
+| `status` | `enum` | Current state (see lifecycle above) |
+| `cancel_reason` | `text` | Required (≥ 10 chars) when moving to `ANULADA` |
+| `tenant_id` | `uuid` | Multi-tenant isolation key |
+
+---
+
+## Interventions
+
+When a client reports an issue covered under warranty, the operations team registers a **warranty intervention**. Intervention codes are auto-generated as `INT-XXXXXX`.
+
+### Intervention Lifecycle
+
+```
+REGISTRADA → EN_PROCESO → RESUELTA → CERRADA
+```
+
+**State effects on the parent warranty:**
+
+- Opening a `REGISTRADA` or `EN_PROCESO` intervention automatically advances the warranty from `ACTIVA` → `EJECUTADA`.
+- When all interventions for a warranty reach `RESUELTA` or `CERRADA`, the warranty reverts to `ACTIVA` (if still within the coverage period).
+
+### Intervention Fields
+
+| Field | Type | Description |
+|---|---|---|
+| `intervention_code` | `varchar(50)` | Auto-generated `INT-XXXXXX` |
+| `warranty_id` | `uuid` | FK → `warranties`; required |
+| `description` | `text` | Issue description; required |
+| `assigned_user_id` | `uuid` | Technician assigned to resolve the issue |
+| `intervention_date` | `date` | Date of intervention; defaults to `CURRENT_DATE` |
+| `resolution` | `text` | Resolution notes; filled on close |
+| `status` | `enum` | `REGISTRADA`, `EN_PROCESO`, `RESUELTA`, `CERRADA` |
+| `job_id` | `uuid` | Optional FK to a linked field service job if a full work order is needed |
+
+### Linking Interventions to Jobs
+
+For complex warranty claims that require field work, an intervention can be linked to a standard `jobs` record via the `job_id` foreign key. This gives the intervention the full jobs execution lifecycle — activity tracking, material consumption, document attachment, and the `DELIVERY_NOTE` sign-off requirement.
+
+Inventory movements can also be linked to an intervention via the `warranty_intervention_id` column on `inventory_movements`, so parts consumed during warranty service are correctly tracked separately from regular job consumption.
+
+---
+
+## Client Portal
+
+Clients access their warranties directly at `/portal`. Through the portal they can:
+
+- View all **active and historical warranties** associated with their account.
+- See coverage dates, warranty type, and linked job details.
+- Submit a new **claim** by describing the issue; the submission creates a new `warranty_interventions` record in `REGISTRADA` status.
+- Track the status of open interventions in real time.
+
+<Tip>
+  Warranty visibility in the portal is scoped by `client_id` via RLS — a client user can only see warranties where `client_id` matches their own account.
+</Tip>
+
+---
+
+## RBAC Permissions
+
+| Permission | Roles |
+|---|---|
+| `warranties.view` | All internal roles; `CLIENTE` via portal (own records only) |
+| `warranties.manage` (create, edit) | `GERENTE`, `GERENTE_GENERAL`, `JEFE_PROYECTOS`, `COORDINADOR_OPERACIONES` |
+| `interventions.manage` | `GERENTE`, `GERENTE_GENERAL`, `JEFE_PROYECTOS`, operations staff |
+| `warranties.cancel` | `GERENTE`, `GERENTE_GENERAL` (requires `cancel_reason`) |
+
+All `warranties` and `warranty_interventions` rows have RLS enabled and are scoped to `tenant_id`. The Auditor role can view soft-deleted records for compliance purposes.

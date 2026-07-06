@@ -1,0 +1,253 @@
+---
+title: "Inventory Module: SKU Catalog, Stock Movements, and Purchases"
+sidebarTitle: "Inventory"
+description: "Manage product SKUs, track stock levels with full movement history, create purchase orders, and link inventory consumption to work orders."
+---
+
+The Inventory module gives B2B Import ERP a complete view of physical assets — from the product catalog through real-time stock levels to the full history of every item that ever entered or left a warehouse. It integrates tightly with the Jobs module (field technicians consume materials) and with the Purchases sub-area (suppliers replenish stock via purchase orders). All operations are warehouse-scoped, multi-tenant isolated, and backed by immutable audit logs.
+
+---
+
+## Three Sub-Areas
+
+<CardGroup cols={3}>
+  <Card title="Product Catalog" icon="tag">
+    Manage SKUs with item codes, types, units of measure, cost prices, and reorder thresholds.
+  </Card>
+  <Card title="Stock & Movements" icon="boxes-stacked">
+    Every stock change is recorded as an immutable movement. Real-time available stock is derived from the `inventory_stock` table.
+  </Card>
+  <Card title="Purchase Orders" icon="truck">
+    Create POs against suppliers, track delivery, receive items line-by-line, and update stock automatically on approval.
+  </Card>
+</CardGroup>
+
+---
+
+## 1. Product Catalog
+
+The `inventory_items` table stores one row per SKU per tenant. Item codes are auto-generated as `ART-000001` if not provided manually.
+
+| Field | Type | Description |
+|---|---|---|
+| `item_code` | `varchar(50)` | Unique SKU code per tenant; auto-generated as `ART-XXXXXX` |
+| `name` | `varchar(250)` | Full item name; required |
+| `description` | `text` | Optional extended description |
+| `category` | `varchar(100)` | Free-text category for grouping |
+| `item_type` | `enum` | `Material`, `Herramienta`, `Equipo`, `Consumible`, `Repuesto` |
+| `unit` | `varchar(20)` | Unit of measure (e.g., `u.`, `m`, `kg`, `lt`) |
+| `minimum_stock` | `decimal(18,4)` | Alert threshold — triggers `INVENTORY_STOCK_LOW` event |
+| `reorder_point` | `decimal(18,4)` | Critical threshold — triggers `INVENTORY_STOCK_CRITICAL` event |
+| `maximum_stock` | `decimal(18,4)` | Upper stock cap for planning |
+| `average_cost` | `decimal(18,2)` | Weighted-average unit cost; recalculated on every entry movement |
+| `last_cost` | `decimal(18,2)` | Cost of the most recent purchase |
+| `purchase_price` | `decimal(18,2)` | Supplier purchase price |
+| `status` | `enum` | `ACTIVO` or `INACTIVO` |
+
+### Server Actions (from `inventory-purchases.ts`)
+
+```typescript
+// List all active items for a tenant
+getInventoryItems(tenantCode?: string | null): Promise<InventoryItem[]>
+
+// Create a new SKU
+createInventoryItem(
+  tenantCode: string | null,
+  itemData: {
+    itemCode: string;
+    name: string;
+    description?: string;
+    category?: string;
+    itemType: string;       // 'Material' | 'Herramienta' | 'Equipo' | 'Consumible' | 'Repuesto'
+    unit: string;
+    minimumStock: number;
+    reorderPoint: number;
+    maximumStock: number;
+    averageCost: number;
+    purchasePrice: number;
+  }
+): Promise<InventoryItem>
+
+// Update an existing SKU
+updateInventoryItem(
+  tenantCode: string | null,
+  itemId: string,
+  itemData: { ...same fields as create, plus status: string }
+): Promise<InventoryItem>
+
+// Soft-delete a SKU (sets deleted_at, status → INACTIVO)
+softDeleteInventoryItem(
+  tenantCode: string | null,
+  itemId: string,
+  reason: string
+): Promise<InventoryItem>
+```
+
+<Note>
+  Physical deletion of items is blocked at the database level by the `trg_block_item_delete` trigger. Use `softDeleteInventoryItem()` with a reason string to deactivate a SKU without losing historical movement data.
+</Note>
+
+---
+
+## 2. Stock Movements
+
+Every change to stock — whether an incoming purchase, an outbound job consumption, a manual adjustment, or a warehouse transfer — is recorded as an **immutable** row in `inventory_movements`. The current stock level is derived from the `inventory_stock` table, which the system updates automatically when a movement transitions to `Aplicado`.
+
+### Movement Lifecycle
+
+```
+Registrado → Aplicado
+     └──────→ Anulado
+```
+
+Movements in `Aplicado` or `Anulado` state are fully immutable. Any attempt to modify them raises a database exception.
+
+### Movement Types
+
+| `movement_type` | Effect on Stock | Notes |
+|---|---|---|
+| `Entrada` | Increases `quantity` in warehouse | Triggers weighted-average cost recalculation |
+| `Salida` | Decreases `quantity` in warehouse | `job_id` is **required**; auto-fills `unit_cost` from `average_cost` |
+| `Ajuste` | Positive or negative stock correction | Restricted to `JEFE_INVENTARIO` / Gerencia |
+| `Reserva` | Increases `reserved_quantity` | Decreases `available_quantity` without affecting physical stock |
+| `Transferencia` | Moves stock between two warehouses | Requires `source_warehouse_id` ≠ `destination_warehouse_id` |
+
+### Stock Calculation
+
+The `inventory_stock` table maintains a live view of stock per warehouse per item:
+
+```
+available_quantity = quantity - reserved_quantity
+```
+
+Negative stock is prohibited at the database level — any movement that would push physical or available stock below zero raises an exception and is rolled back.
+
+### Key Movement Fields
+
+| Field | Description |
+|---|---|
+| `movement_code` | Auto-generated as `MOV-XXXXXX` |
+| `warehouse_id` | Target warehouse (for non-transfers) |
+| `source_warehouse_id` / `destination_warehouse_id` | For `Transferencia` type only |
+| `item_id` | FK → `inventory_items` |
+| `job_id` | Required for `Salida`; links consumption to a work order |
+| `quantity` | Must be `> 0` |
+| `unit_cost` | Auto-filled from `average_cost` on outbound moves |
+| `total_cost` | Computed column: `quantity × unit_cost` |
+| `status` | `Registrado` → `Aplicado` / `Anulado` |
+
+---
+
+## 3. Purchase Orders
+
+Purchase orders (POs) let you source stock from suppliers. A PO starts as a `BORRADOR`, progresses through approval and shipping, and finalises as `RECIBIDO` — at which point stock levels are updated.
+
+### Purchase Order Statuses
+
+```
+BORRADOR → ENVIADA → APROBADA → EN_CAMINO → RECIBIDO_PARCIAL → RECIBIDO
+                                                   ↓
+                                              CANCELADA
+```
+
+### Server Actions (from `inventory-purchases.ts`)
+
+```typescript
+// List all vendors for a tenant
+getVendors(tenantCode?: string | null): Promise<Vendor[]>
+
+// Create a new vendor/supplier
+createVendor(
+  tenantCode: string | null,
+  vendorData: {
+    legalName: string;
+    taxId?: string;
+    contactName?: string;
+    contactEmail?: string;
+    contactPhone?: string;
+    city?: string;
+    paymentTerms?: number;  // days; default 30
+  }
+): Promise<Vendor>
+
+// List all purchase orders for a tenant
+getPurchaseOrders(tenantCode?: string | null): Promise<PurchaseOrder[]>
+
+// Get full PO detail including line items
+getPurchaseOrderDetail(
+  tenantCode: string | null,
+  poId: string
+): Promise<PurchaseOrderDetail>
+
+// Create a new purchase order
+createPurchaseOrder(
+  tenantCode: string | null,
+  poData: {
+    vendorId: string;
+    expectedDeliveryDate?: string;
+    notes?: string;
+    items: {
+      description: string;
+      quantity: number;
+      unit: string;
+      unitPrice: number;
+      itemId?: string;  // links line to an inventory_items SKU
+    }[];
+  }
+): Promise<PurchaseOrder>
+
+// Advance PO to a new status
+updatePurchaseOrderStatus(
+  tenantCode: string | null,
+  poId: string,
+  newStatus: string
+): Promise<PurchaseOrder>
+
+// Record received quantities per line item
+receivePurchaseOrderItems(
+  tenantCode: string | null,
+  poId: string,
+  receivedItems: {
+    itemId: string;
+    receivedQty: number;
+    qualityChecked: boolean;
+  }[]
+): Promise<{ status: string; allReceived: boolean }>
+```
+
+PO codes are auto-generated as `OC-2026-0001`. When all lines are fully received, the PO status automatically advances to `RECIBIDO`; partial receipts leave it at `RECIBIDO_PARCIAL`.
+
+---
+
+## Reorder Alerts
+
+The database continuously monitors stock levels after each movement is applied. Two alert events are dispatched automatically:
+
+| Event | Condition | Severity |
+|---|---|---|
+| `INVENTORY_STOCK_LOW` | `available_quantity ≤ minimum_stock` | Warning |
+| `INVENTORY_STOCK_CRITICAL` | `available_quantity ≤ reorder_point` | Critical |
+
+These events feed the Alerts module, which can distribute notifications by email or future channels (WhatsApp). Items at or below `reorder_point` should trigger an immediate purchase order.
+
+---
+
+## RBAC Permissions
+
+| Permission | Roles |
+|---|---|
+| `items.manage` (catalog CRUD) | `JEFE_INVENTARIO`, `GERENTE`, `GERENTE_GENERAL` |
+| `warehouses.manage` | `JEFE_INVENTARIO`, `GERENTE`, `GERENTE_GENERAL` |
+| `inventory.movement` (Entrada, Salida, Reserva) | `ALMACENISTA`, `JEFE_INVENTARIO`, `GERENTE`, `GERENTE_GENERAL` |
+| `inventory.adjustment` (Ajuste, Transferencia) | `JEFE_INVENTARIO`, `GERENTE`, `GERENTE_GENERAL` |
+| `inventory.approve` (Registrado → Aplicado) | `JEFE_INVENTARIO`, `GERENTE`, `GERENTE_GENERAL` |
+| `inventory.view` | All internal roles; `AUDITOR` can see soft-deleted records |
+
+---
+
+## Dashboard URLs
+
+| Area | URL |
+|---|---|
+| Item catalog & stock levels | `/dashboard/inventory?tenant=<code>` |
+| Purchase orders & vendors | `/dashboard/purchases?tenant=<code>` |

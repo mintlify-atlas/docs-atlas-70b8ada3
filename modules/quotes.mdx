@@ -1,0 +1,228 @@
+---
+title: "Quotes Module: Commercial Proposals with Line Items and Approvals"
+sidebarTitle: "Quotes"
+description: "Create multi-item quotations linked to requirements, version them through review cycles, and convert approved quotes to work orders with full PDF export."
+---
+
+The Quotes module handles the creation and lifecycle management of commercial proposals in B2B Import ERP. Quotes are always linked to a client and optionally to an open Requirement. They support multi-line item composition with per-line discounts and taxes, automatic header total recalculation, PDF export with tenant branding, and a full versioning system when a quote is rejected and needs to be revised. Once approved, a quote unlocks the transition of its linked Requirement to `OT_GENERADA` (Work Order Generated).
+
+---
+
+## Quote Lifecycle
+
+Quote states are enforced by the `validate_quote_state_transitions` trigger. States marked as **final** cannot be changed once reached.
+
+```
+BORRADOR
+   │
+   ├──► CANCELADA  (final — only from BORRADOR)
+   │
+   ▼
+EN_REVISION ──── triggers automatic approval routing
+   │
+   ▼
+ENVIADA
+   │
+   ├──► APROBADA   (final)
+   ├──► RECHAZADA  (final — requires reject_reason ≥ 10 chars)
+   └──► VENCIDA
+```
+
+| State | Description |
+|---|---|
+| `BORRADOR` | Draft; items can be freely added or modified |
+| `EN_REVISION` | Submitted for internal review; triggers the approval workflow |
+| `ENVIADA` | Sent to the client; awaiting client decision |
+| `APROBADA` | Approved — **final state**; unlocks work order creation |
+| `RECHAZADA` | Rejected — **final state**; a new version can be created |
+| `VENCIDA` | Expired; typically set when a new version supersedes this one |
+| `CANCELADA` | Cancelled — **final state**; only allowed from `BORRADOR` |
+
+<Warning>
+`APROBADA`, `RECHAZADA`, and `CANCELADA` are terminal states. The trigger raises an exception if any further status change is attempted on a quote in one of these states.
+</Warning>
+
+---
+
+## QuoteRow Interface
+
+The following interface is exported from `src/app/actions/quotes.ts`:
+
+```typescript
+interface QuoteRow {
+  id: string;
+  quote_code: string;            // Auto-generated: "COT-000001"
+  client_id: string;
+  requirement_id: string | null;
+  assigned_user_id: string | null;
+  valid_until: string;           // ISO date string
+  subtotal: number;              // Auto-calculated from line items
+  total_amount: number;          // subtotal - discount_amount + tax_amount
+  status:
+    | "BORRADOR"
+    | "EN_REVISION"
+    | "ENVIADA"
+    | "APROBADA"
+    | "RECHAZADA"
+    | "VENCIDA";
+  created_at: string;
+  // Joined relation
+  client: { legal_name: string } | null;
+}
+```
+
+<Note>
+`quote_code` is auto-generated as `COT-XXXXXX` by the `handle_quote_versioning` trigger using `tenant_sequences`. The code is immutable after creation.
+</Note>
+
+---
+
+## Quote Items
+
+Line items are stored in the `quote_items` table and linked to a quote via `quote_id`. The `trg_calculate_quote_item_totals` trigger computes line amounts automatically on every insert or update:
+
+```
+subtotal_linea = quantity × unit_price
+tax_amount     = (subtotal_linea - discount_amount) × tax_percent / 100
+line_total     = subtotal_linea - discount_amount + tax_amount
+```
+
+After any change to `quote_items`, `trg_update_quote_totals` recalculates the quote header:
+
+```
+quotes.subtotal      = SUM(quote_items.line_total)
+quotes.total_amount  = subtotal - discount_amount + tax_amount
+```
+
+| Field | Type | Description |
+|---|---|---|
+| `quote_id` | `uuid` | FK to `quotes.id` |
+| `item_order` | `integer` | Display order of the line |
+| `item_type` | `enum` | `MATERIAL` · `SERVICIO` · `EQUIPO` · `MANO_OBRA` · `OTRO` |
+| `description` | `text` | Line item description (required) |
+| `quantity` | `numeric(18,4)` | Quantity > 0 |
+| `unit` | `varchar(50)` | Unit of measure (e.g. `UNIDAD`, `ML`, `HR`) |
+| `unit_price` | `numeric(18,2)` | Unit price ≥ 0 |
+| `discount_amount` | `numeric(18,2)` | Per-line monetary discount |
+| `tax_percent` | `numeric(5,2)` | Tax rate as a percentage (e.g. `19.00` for 19% IVA) |
+| `line_total` | `numeric(18,2)` | Auto-calculated net line total |
+
+---
+
+## Server Actions
+
+<CardGroup cols={2}>
+  <Card title="getQuotes" icon="list">
+    **`getQuotes(tenantCode?)`**
+
+    Returns all non-deleted quotes for the resolved tenant with joined `client.legal_name`, ordered newest first.
+
+    ```typescript
+    const quotes = await getQuotes("acme");
+    // Returns QuoteRow[]
+    ```
+  </Card>
+  <Card title="createQuote" icon="plus">
+    **`createQuote(tenantCode, quoteData)`**
+
+    Creates a new quote in `BORRADOR` status. `quote_code` and `version` are set by the database trigger. Provide `requirementId` to link the quote to an existing requirement.
+
+    ```typescript
+    const quote = await createQuote("acme", {
+      clientId: "uuid-client",
+      requirementId: "uuid-req",  // optional
+      validUntil: "2026-09-30",
+    });
+    ```
+  </Card>
+</CardGroup>
+
+<CardGroup cols={2}>
+  <Card title="getQuoteItems" icon="receipt">
+    **`getQuoteItems(quoteId)`**
+
+    Returns all line items for a specific quote ordered by `item_order` ascending.
+
+    ```typescript
+    const items = await getQuoteItems("uuid-quote");
+    ```
+  </Card>
+  <Card title="addQuoteItem" icon="circle-plus">
+    **`addQuoteItem(tenantCode, itemData)`**
+
+    Inserts a line item. The trigger immediately calculates `tax_amount` and `line_total`, then recalculates the quote header totals.
+
+    ```typescript
+    await addQuoteItem("acme", {
+      quoteId: "uuid-quote",
+      description: "Extractor centrífugo 3HP",
+      itemType: "EQUIPO",
+      quantity: 2,
+      unitPrice: 1850000,
+      discountAmount: 0,
+      taxPercent: 19,
+      itemOrder: 1,
+    });
+    ```
+  </Card>
+</CardGroup>
+
+---
+
+## PDF Export
+
+Quotes can be exported to PDF using **jsPDF** with full tenant branding applied in the document header (logo, tenant name, contact information) and footer (terms, validity date, signature area). The export is triggered from the quote detail page and generates a downloadable PDF client-side.
+
+<Note>
+A quote submitted for approval (`EN_REVISION`) must have at least one line item. The state transition trigger raises an exception if `quote_items` is empty when attempting to move from `BORRADOR` to `EN_REVISION`.
+</Note>
+
+---
+
+## Versioning
+
+When a quote is rejected (`RECHAZADA`), a new version can be created with the same `quote_code` but an incremented `version` number. The `handle_quote_versioning` trigger:
+
+1. Detects that a `quote_code` already exists in the tenant.
+2. Sets `NEW.version = max_version + 1`.
+3. Marks the previous `ENVIADA` or `EN_REVISION` version as `VENCIDA` automatically.
+
+This preserves the complete negotiation history under one quote code while making it clear which version is the active proposal.
+
+---
+
+## Approval Flow
+
+When a quote transitions to `EN_REVISION`, the `route_quote_approvals` trigger fires automatically and:
+
+1. Looks up an active `approval_rules` rule matching the quote's `total_amount` range and `entity_type = 'QUOTE'`.
+2. If a matching rule exists with a `flow_id`, it creates an `approval_requests` record and instantiates `approval_request_steps` for each step in the flow.
+3. If no rule is found, the quote is **automatically escalated** to the `GERENTE_GENERAL` role.
+4. If the rule has `flow_id = NULL`, the quote is **auto-approved** immediately.
+
+<Tip>
+While a quote has a `PENDIENTE` or `EN_PROCESO` approval request, its items and header are **locked**. Any attempt to modify the quote raises an exception from `check_quote_approval_lock`.
+</Tip>
+
+See the [Approvals module](/modules/approvals) for the full approval workflow and multi-step configuration.
+
+---
+
+## RBAC — Role-Based Access
+
+| Permission | Roles |
+|---|---|
+| `quotes.create` | `EJECUTIVO_COMERCIAL`, `DIRECTOR_COMERCIAL`, `GERENTE_GENERAL` |
+| `quotes.submit` (→ `EN_REVISION`, `ENVIADA`) | `EJECUTIVO_COMERCIAL`, `DIRECTOR_COMERCIAL` |
+| `quotes.approve` (→ `APROBADA`, `RECHAZADA`) | `GERENTE_GENERAL`, `DIRECTOR_COMERCIAL` |
+| `quotes.cancel` | `EJECUTIVO_COMERCIAL`, `DIRECTOR_COMERCIAL`, `GERENTE_GENERAL` |
+
+---
+
+## Dashboard
+
+Navigate to the Quotes dashboard for your tenant:
+
+```
+/dashboard/quotes?tenant=<code>
+```

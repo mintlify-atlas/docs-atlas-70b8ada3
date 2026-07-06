@@ -1,47 +1,162 @@
 ---
-title: "Quickstart"
-description: "Begin with a guide on the fastest path to a successful outcome"
+title: "Get Started with B2B Import ERP in Minutes"
+sidebarTitle: "Quickstart"
+description: "Learn how to deploy B2B Import ERP locally, run database migrations, and access your first tenant dashboard in under 10 minutes."
 ---
 
-Describe how someone begins using your product. What is the first thing they need to do? Are there any prerequisites?
+This guide walks you through spinning up a fully functional local instance of B2B Import ERP — complete with a seeded multi-tenant database, RLS policies, and both demo tenant dashboards — in under 10 minutes.
 
-A quickstart should take someone from zero to using your product. They'll get a quick win and a sense of what they can accomplish.
+<Warning>
+  `SUPABASE_SERVICE_ROLE_KEY` is a privileged server-side secret that bypasses Row Level Security. It is used exclusively inside Next.js Server Actions via the `supabaseAdmin` client. **Never expose this key to the browser, include it in client-side bundles, or commit it to source control.** Treat it with the same care as a root database password.
+</Warning>
 
-## Prerequisites
-
-Before you begin, you must have:
-
-- Requirement one (for example, Node.js 18+, a free account, an API key)
-- Requirement two (for example, a compatible device, a compatible browser, a compatible operating system)
-
-## Get started
+## Steps
 
 <Steps>
-  <Step title="Install">
-    Describe how to install your product or sign up.
+  <Step title="Clone the repository">
+    Clone the project from GitHub and navigate into the project directory.
 
     ```bash
-    npm install your-package
+    git clone https://github.com/ency07/B2B-import.git
+    cd B2B-import
     ```
   </Step>
-  <Step title="Configure">
-    Describe any setup or configuration needed before first use.
 
-    ```bash
-    your-cli init
-    ```
+  <Step title="Install dependencies">
+    Install all Node.js dependencies using your preferred package manager.
+
+    <CodeGroup>
+      ```bash npm
+      npm install
+      ```
+
+      ```bash yarn
+      yarn install
+      ```
+
+      ```bash pnpm
+      pnpm install
+      ```
+    </CodeGroup>
   </Step>
-  <Step title="Run it">
-    Show the first thing a user does to see it working.
+
+  <Step title="Configure environment variables">
+    Create a `.env.local` file in the project root and populate it with the three required Supabase credentials. All three values are available in your Supabase project dashboard under **Project Settings → API**.
+
+    ```bash .env.local
+    NEXT_PUBLIC_SUPABASE_URL=https://<your-project-ref>.supabase.co
+    NEXT_PUBLIC_SUPABASE_ANON_KEY=<your-anon-public-key>
+    SUPABASE_SERVICE_ROLE_KEY=<your-service-role-secret-key>
+    ```
+
+    | Variable | Where to find it | Visibility |
+    |---|---|---|
+    | `NEXT_PUBLIC_SUPABASE_URL` | Project Settings → API → Project URL | Public (safe for browser) |
+    | `NEXT_PUBLIC_SUPABASE_ANON_KEY` | Project Settings → API → `anon` `public` key | Public (safe for browser) |
+    | `SUPABASE_SERVICE_ROLE_KEY` | Project Settings → API → `service_role` `secret` key | **Server-only — never expose** |
+
+    <Tip>
+      The `NEXT_PUBLIC_` prefix makes the first two variables available in client-side code. The `SUPABASE_SERVICE_ROLE_KEY` intentionally has no such prefix — Next.js will keep it server-side only.
+    </Tip>
+  </Step>
+
+  <Step title="Run database migrations">
+    All schema definitions, RLS policies, seed data, and function declarations live in the `supabase/migrations/` directory. The project ships with **31 migration files** covering every module from the core tenant schema through the pre-engineering wizard assistant.
+
+    **Option A — Supabase CLI (recommended):**
 
     ```bash
-    your-cli start
+    supabase db push
     ```
+
+    This applies all pending migrations to your linked Supabase project in the correct order.
+
+    **Option B — Supabase Dashboard SQL Editor:**
+
+    Navigate to your project's SQL Editor and run each file from `supabase/migrations/` in ascending filename order (migrations are prefixed with a timestamp, e.g. `20260501000001_...sql`).
+
+    <Note>
+      Migrations must be applied in strict chronological order. Later migrations reference tables, functions, and RLS policies created by earlier ones. Skipping or reordering files will cause foreign-key or policy errors.
+    </Note>
+  </Step>
+
+  <Step title="Start the development server">
+    Launch the Next.js development server with Turbopack.
+
+    ```bash
+    npm run dev
+    ```
+
+    The server starts at `http://localhost:3000`. You should see the platform landing page for the default tenant.
+  </Step>
+
+  <Step title="Access the dashboard">
+    The active tenant is selected via the `tenant` query parameter on every dashboard route. Navigate to either of the pre-seeded demo tenants:
+
+    ```
+    http://localhost:3000/dashboard?tenant=acme
+    http://localhost:3000/dashboard?tenant=apex
+    ```
+
+    Valid values for the `tenant` parameter are `acme`, `apex`, and `default` (which resolves to `acme`). Any unrecognised value also falls back to `acme`.
+
+    <Tip>
+      The tenant code is resolved server-side in every Server Action via the `getTenantId()` helper in `src/app/actions.ts`. It maps the short code to the full UUID used for all `tenant_id` database queries.
+    </Tip>
   </Step>
 </Steps>
 
-<Tip>
-  Give people a way to get help. This could be a link to a support page, a chat with a customer support agent, or a forum for your product.
+---
 
-  Example: Need help? Reach out to us at [support@yourcompany.com](mailto:support@yourcompany.com).
-</Tip>
+## Available Test Tenants
+
+The project ships with two fully seeded demo tenants, each with its own brand identity, product catalog, clients, quotes, invoices, and inventory records.
+
+<CardGroup cols={2}>
+  <Card title="AeroMax Industrial" icon="wind">
+    **Tenant code:** `acme`
+
+    **Theme:** Sky blue / industrial
+
+    **UUID:** `a0000000-0000-0000-0000-000000000000`
+
+    The primary reference implementation. Demonstrates the full ventilation and industrial engineering vertical, including the pre-engineering wizard, SCADA-style dashboards, and PDF diagnostic reports.
+  </Card>
+  <Card title="Apex Logística B2B" icon="truck">
+    **Tenant code:** `apex`
+
+    **Theme:** Green / logistics
+
+    **UUID:** `b0000000-0000-0000-0000-000000000000`
+
+    A second tenant proving the white-label isolation. All brand colors, logos, and settings are independently configured. Data is completely isolated from `acme` at the RLS layer.
+  </Card>
+</CardGroup>
+
+---
+
+## Test Scripts
+
+The project includes a comprehensive suite of per-module test scripts you can run independently. Each script seeds data and exercises its module's Server Actions in isolation — no shared test state.
+
+```bash
+npm run test:clients          # Client CRUD and contact management
+npm run test:requirements     # Technical requirements module
+npm run test:quotes           # Quote creation and line items
+npm run test:approvals        # Multi-level approval workflows
+npm run test:jobs             # Work order lifecycle
+npm run test:inventory        # Stock, warehouses, and movements
+npm run test:invoices         # Invoice creation and status transitions
+npm run test:warranties       # Post-sale warranty claims
+npm run test:crm              # CRM leads and pipeline
+npm run test:marketing        # Marketing and website module
+npm run test:dashboards       # Analytics KPIs and dashboard widgets
+npm run test:white-label      # White-label branding and tenant settings
+npm run test:security-audit   # RLS policies and audit log integrity
+npm run test:multitenant      # Cross-tenant isolation verification
+npm run test:go-live          # Full end-to-end pre-production checklist
+```
+
+<Note>
+  Run `npm run test:multitenant` first after applying migrations — it validates that RLS policies correctly isolate `acme` and `apex` data before you test individual modules.
+</Note>

@@ -1,0 +1,169 @@
+---
+title: "Webhooks Reference: Wompi Payment Events Endpoint"
+sidebarTitle: "Webhooks"
+description: "POST /api/webhooks/wompi receives Wompi payment gateway events. Validates the payload structure and updates invoice status based on transaction outcome."
+---
+
+B2B Import ERP exposes a single inbound webhook endpoint to receive payment lifecycle events from the [Wompi](https://wompi.co) payment gateway. When Wompi processes a transaction it fires an HTTP notification to this URL; the handler validates the payload, delegates processing to `processWompiWebhook()`, and returns a structured acknowledgement. The endpoint is stateless and idempotent — re-delivering the same event will attempt to update the same transaction record.
+
+<Note>
+  Configure this URL in the **Wompi merchant dashboard → Configuración → Webhooks**. The full URL is `https://<your-domain>/api/webhooks/wompi`.
+</Note>
+
+---
+
+## Endpoint Overview
+
+<CardGroup cols={2}>
+  <Card title="POST /api/webhooks/wompi" icon="webhook">
+    Receives payment event notifications from Wompi. Processes the event and updates the corresponding invoice and transaction records.
+  </Card>
+  <Card title="GET /api/webhooks/wompi" icon="check">
+    Verification probe used by Wompi to confirm the endpoint is reachable. Returns a simple status object.
+  </Card>
+</CardGroup>
+
+---
+
+## GET — Verification Probe
+
+Wompi may issue a `GET` request to verify that the endpoint is live before registering it in the dashboard.
+
+**Response `200 OK`:**
+
+```json
+{
+  "status": "Wompi webhook endpoint active"
+}
+```
+
+---
+
+## POST — Payment Event
+
+### Request Format
+
+Wompi sends a JSON body with the following structure. The `event` field identifies the event type and `data.transaction` contains the transaction details.
+
+```json
+{
+  "event": "transaction.updated",
+  "data": {
+    "transaction": {
+      "id": "TXN_123456",
+      "reference": "INV-2026-0042",
+      "status": "APPROVED",
+      "amount_in_cents": 150000000,
+      "currency": "COP"
+    }
+  }
+}
+```
+
+| Field | Type | Description |
+|---|---|---|
+| `event` | `string` | Event type. Currently `transaction.updated` is the primary event. |
+| `data` | `object` | Event payload container. |
+| `data.transaction.id` | `string` | Wompi's unique transaction identifier. |
+| `data.transaction.reference` | `string` | The reference string set when creating the checkout — matches `payment_transactions.reference_id`. |
+| `data.transaction.status` | `string` | `APPROVED`, `DECLINED`, `VOIDED`, or `ERROR`. |
+| `data.transaction.amount_in_cents` | `number` | Amount in centavos COP (divide by 100 for COP). |
+| `data.transaction.currency` | `string` | Always `"COP"` for Colombian Peso. |
+
+### Validation
+
+The handler performs a structural check before any processing:
+
+```ts
+if (!body.event || !body.data) {
+  return NextResponse.json(
+    { error: "Payload inválido: falta 'event' o 'data'" },
+    { status: 400 }
+  );
+}
+```
+
+If either `event` or `data` is absent, the request is rejected immediately with HTTP `400`.
+
+### Processing Flow
+
+```
+POST body received
+        │
+        ▼
+  Validate: event + data present?
+        │  No  → 400 Bad Request
+        │
+        ▼  Yes
+  processWompiWebhook(body)
+        │
+        ├─ Look up payment_transactions by reference_id
+        ├─ Map Wompi status → internal status (APPROVED / DECLINED / VOIDED / ERROR)
+        ├─ Update payment_transactions record
+        │
+        └─ If APPROVED:
+              ├─ Create payments record (PAG-2026-XXXX)
+              ├─ Update invoice paid_amount, balance_amount, status
+              ├─ Create payment_reconciliations entry
+              └─ revalidatePath("/portal") + revalidatePath("/dashboard/invoices")
+        │
+        ▼
+  Return { received: true, success: boolean, status: string }
+```
+
+### Response Codes
+
+| Status | Body | Meaning |
+|---|---|---|
+| `200` | `{ "received": true, "success": true, "status": "APPROVED" }` | Event processed successfully. |
+| `400` | `{ "error": "Payload inválido: falta 'event' o 'data'" }` | Request body missing required fields. |
+| `500` | `{ "error": "<message>" }` | Unexpected server-side error during processing. |
+
+### Handler Source
+
+The handler is located at `src/app/api/webhooks/wompi/route.ts`:
+
+```ts
+import { NextRequest, NextResponse } from "next/server";
+import { processWompiWebhook } from "@/app/actions/payments";
+
+export async function POST(request: NextRequest) {
+  try {
+    const body = await request.json();
+
+    // Validate required fields
+    if (!body.event || !body.data) {
+      return NextResponse.json(
+        { error: "Payload inválido: falta 'event' o 'data'" },
+        { status: 400 }
+      );
+    }
+
+    console.log(
+      `[Wompi Webhook] Event: ${body.event}, Reference: ${body.data?.reference_id || body.data?.id}`
+    );
+
+    const result = await processWompiWebhook(body);
+
+    return NextResponse.json({ received: true, ...result });
+  } catch (error: unknown) {
+    const message =
+      error instanceof Error ? error.message : "Error interno del servidor";
+    console.error("[Wompi Webhook] Error:", message);
+    return NextResponse.json({ error: message }, { status: 500 });
+  }
+}
+
+// Wompi may send GET for verification
+export async function GET() {
+  return NextResponse.json({ status: "Wompi webhook endpoint active" });
+}
+```
+
+### Error Handling
+
+Any uncaught exception inside `processWompiWebhook` propagates to the `catch` block, which extracts the message and returns HTTP `500`. This prevents Wompi from receiving an unstructured error response, which would cause it to retry the delivery.
+
+<Warning>
+  Wompi will retry unacknowledged webhook deliveries (non-`2xx` responses) with an exponential back-off. Ensure your database is reachable and the `payment_transactions` reference exists before the webhook fires. For sandbox testing, Wompi provides a **Reintentar** button in the dashboard event log.
+</Warning>

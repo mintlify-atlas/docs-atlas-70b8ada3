@@ -1,0 +1,142 @@
+{
+  "projectType": "saas",
+  "projectName": "B2B Import ERP",
+  "projectDescription": "A multi-tenant B2B ERP platform built with Next.js and Supabase for managing the full commercial, operational, and financial lifecycle of industrial B2B companies, with white-label support and a public pre-engineering wizard.",
+  "theme": "luma",
+  "primaryColor": "#0284c7",
+  "lightColor": "#e0f2fe",
+  "darkColor": "#0c4a6e",
+  "navigation": {
+    "tabs": [
+      {
+        "tab": "Overview",
+        "groups": [
+          {
+            "group": "Get Started",
+            "pages": [
+              "introduction",
+              "quickstart",
+              "architecture"
+            ]
+          },
+          {
+            "group": "Core Concepts",
+            "pages": [
+              "concepts/multi-tenancy",
+              "concepts/rbac",
+              "concepts/state-machine",
+              "concepts/white-label"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "Modules",
+        "groups": [
+          {
+            "group": "Commercial",
+            "pages": [
+              "modules/clients",
+              "modules/requirements",
+              "modules/quotes",
+              "modules/approvals"
+            ]
+          },
+          {
+            "group": "Operations",
+            "pages": [
+              "modules/jobs",
+              "modules/inventory",
+              "modules/warranties"
+            ]
+          },
+          {
+            "group": "Finance",
+            "pages": [
+              "modules/invoices",
+              "modules/payments"
+            ]
+          },
+          {
+            "group": "Marketing & CRM",
+            "pages": [
+              "modules/leads-crm",
+              "modules/wizard",
+              "modules/website-cms"
+            ]
+          },
+          {
+            "group": "Platform",
+            "pages": [
+              "modules/settings",
+              "modules/integrations",
+              "modules/analytics"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "Reference",
+        "groups": [
+          {
+            "group": "API & Actions",
+            "pages": [
+              "reference/server-actions",
+              "reference/webhooks",
+              "reference/engineering-utils"
+            ]
+          },
+          {
+            "group": "Database",
+            "pages": [
+              "reference/schema",
+              "reference/rls-policies",
+              "reference/migrations"
+            ]
+          },
+          {
+            "group": "Deployment",
+            "pages": [
+              "reference/environment",
+              "reference/testing"
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "keyFeatures": [
+    "Multi-tenant architecture with Row-Level Security (RLS) for strict data isolation",
+    "Full commercial lifecycle: clients → requirements → quotes → approvals → jobs → invoices",
+    "RBAC system with 9 predefined roles (SUPER_ADMIN, ADMIN_EMPRESA, GERENTE_GENERAL, DIR_COMERCIAL, EJECUTIVO_COM, DIR_OPERACIONES, TECNICO_CAMPO, AUDITOR, CLIENTE)",
+    "White-label support: logo, colors, typography, PDFs, emails, and portal names fully configurable per tenant",
+    "Public pre-engineering wizard (WizardStepper) with CFM calculation engine and lead scoring",
+    "AI-free deterministic recommendation and diagnostic engine for industrial ventilation pre-sales",
+    "Wompi payment gateway integration with webhook processing",
+    "Comprehensive audit log with change tracking on all critical entities",
+    "Industrial CMS for technical product catalog management (categories, families, series, SKUs)",
+    "Financial analytics: cost tracking, profitability reports, and dashboard KPIs",
+    "Export utilities for PDF (jsPDF) and Excel (XLSX) generation in the client"
+  ],
+  "publicApiSurface": [
+    "submitWizardData(tenantCode, WizardSubmission): WizardResult",
+    "getClients(tenantCode): ClientRow[]",
+    "createClient(tenantCode, clientData): Client",
+    "getRequirements(tenantCode): RequirementRow[]",
+    "createRequirement(tenantCode, reqData): Requirement",
+    "getQuotes(tenantCode): QuoteRow[]",
+    "createQuote(tenantCode, quoteData): Quote",
+    "getQuoteItems(quoteId): QuoteItem[]",
+    "createLeadWithScore(tenantCode, leadData): Lead",
+    "calculateLeadScore(email, role, urgency): LeadScoreResult",
+    "createWompiCheckout(tenantCode, invoiceId, amount, customerEmail, customerName): WompiCheckout",
+    "processWompiWebhook(payload): WebhookResult",
+    "POST /api/webhooks/wompi",
+    "getBrandingDefaults(tenantCode): BrandingConfig",
+    "getTenantConfig(tenantId): TenantConfig",
+    "calculateRequiredCfm(dimensions, environment): { cfm, cubicMeters }",
+    "estimatePrice(service, urgency, cubicMeters): PriceEstimation",
+    "getCatalog(tenantCode): CatalogCategory[]",
+    "getProductDetail(productId): ProductDetail"
+  ]
+}

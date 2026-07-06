@@ -1,0 +1,135 @@
+---
+title: "Integrations Module: Email, Messaging, Payments, and AI Providers"
+sidebarTitle: "Integrations"
+description: "Connect B2B Import ERP to external providers for email delivery, WhatsApp, SMS, Telegram, AI inference, and payment gateways — all configured per tenant."
+---
+
+The Integrations module connects B2B Import ERP to the external services your business relies on — transactional email, WhatsApp notifications, Telegram channels, payment gateways, and AI inference providers. Every integration is configured per tenant from the dashboard; credentials are stored securely in the database and never in application environment files. Each provider has an `is_active` flag so you can enable or disable it at runtime without touching code.
+
+## Integration Categories
+
+### Email Providers
+
+<CardGroup cols={3}>
+  <Card title="SMTP (Custom)" icon="server">
+    Any SMTP server. Configure host, port, username, password, and TLS settings. Suitable for self-hosted mail servers or enterprise relays.
+  </Card>
+  <Card title="Resend" icon="paper-plane">
+    Modern transactional email API. Recommended for high deliverability and built-in open/click analytics.
+  </Card>
+  <Card title="SendGrid" icon="envelope-circle-check">
+    Industry-standard email delivery platform. Supports templates, suppression lists, and send-time optimization.
+  </Card>
+  <Card title="Amazon SES" icon="aws">
+    High-volume, low-cost email delivery. Ideal for tenants already running infrastructure on AWS.
+  </Card>
+  <Card title="Mailgun" icon="at">
+    Developer-focused email API with powerful log and analytics features.
+  </Card>
+</CardGroup>
+
+### Messaging
+
+<CardGroup cols={3}>
+  <Card title="WhatsApp — Twilio" icon="whatsapp">
+    Send transactional and notification messages over WhatsApp Business API via the Twilio channel. Configurable per-tenant account SID and auth token.
+  </Card>
+  <Card title="WhatsApp — Meta / 360dialog" icon="meta">
+    Direct integration with the Meta WhatsApp Business API via 360dialog. Supports rich messages and interactive buttons.
+  </Card>
+  <Card title="Telegram" icon="telegram">
+    Bot Token, target Chat IDs, channels, groups, and individual user priorities. All recipients configured in the database — no hardcoded chat IDs.
+  </Card>
+  <Card title="SMS — Twilio" icon="mobile">
+    SMS delivery globally via Twilio. Configurable sender number per use case (sales, support, emergencies).
+  </Card>
+  <Card title="SMS — Vonage" icon="comment-sms">
+    Alternative SMS provider with strong coverage in Latin America.
+  </Card>
+</CardGroup>
+
+### AI / LLM Providers
+
+AI providers power optional features such as catalog natural-language chat (`catalog-chat.ts`) and future engineering analysis enhancements. The wizard and lead scoring engine are **deterministic and do not use AI**.
+
+<CardGroup cols={4}>
+  <Card title="OpenAI" icon="brain">
+    GPT-4o and later models. Requires API key stored per tenant.
+  </Card>
+  <Card title="Anthropic" icon="robot">
+    Claude models. Configurable model version and max tokens.
+  </Card>
+  <Card title="Google Gemini" icon="google">
+    Gemini Pro and Ultra. Requires Google Cloud project API key.
+  </Card>
+  <Card title="DeepSeek" icon="magnifying-glass">
+    Open-weight model with strong code and technical reasoning capabilities.
+  </Card>
+  <Card title="Groq" icon="bolt">
+    Ultra-low-latency inference for Llama and Mixtral models.
+  </Card>
+  <Card title="Ollama" icon="laptop-code">
+    Self-hosted open-source models. Requires a running Ollama instance accessible from the server.
+  </Card>
+  <Card title="Azure OpenAI" icon="microsoft">
+    Enterprise-grade OpenAI deployment on Azure infrastructure. Configures endpoint URL, deployment name, and API version.
+  </Card>
+</CardGroup>
+
+### Payment Gateways
+
+<CardGroup cols={3}>
+  <Card title="Wompi" icon="credit-card">
+    **Primary gateway for Colombia.** Supports PSE (bank transfer), credit/debit cards, Nequi, Bancolombia QR, and cash at Efecty. Requires public key and private key per tenant.
+  </Card>
+  <Card title="Stripe" icon="stripe">
+    Global card processing with support for subscriptions, invoices, and saved payment methods. Recommended for tenants operating internationally.
+  </Card>
+  <Card title="MercadoPago" icon="store">
+    Dominant payment platform across Latin America. Supports multiple local payment methods beyond cards.
+  </Card>
+</CardGroup>
+
+## Configuration Pattern
+
+All credentials, API keys, webhook URLs, and phone numbers are stored as encrypted rows in the `tenant_settings` table under the `INTEGRACIONES` and `TELEFONIA` modules. The **only** values that live in environment files are the server bootstrap secrets required before the database is accessible (e.g., `SUPABASE_SERVICE_ROLE_KEY`, `NEXT_PUBLIC_SUPABASE_URL`).
+
+This means:
+- Adding a new WhatsApp number requires a dashboard update, not a code change or redeployment.
+- Rotating an API key is an instant database update.
+- White-label tenants each configure their own provider credentials independently.
+
+### Telephony Numbers
+
+All contact numbers — sales, support, emergencies, billing, guarantees, admin, manager, technician, WhatsApp, and SMS — are stored as individual keys in the `TELEFONIA` module. The database enforces **E.164 international format** (`+573001112233`) for every phone number.
+
+### Notification Routing
+
+The `notification_routes` key in `INTEGRACIONES` is a JSONB object that maps system events to their delivery channels and recipients:
+
+```json
+{
+  "invoice_overdue": {
+    "channels": ["email", "whatsapp", "telegram"],
+    "recipients": ["gerente", "coordinador"]
+  },
+  "lead_created": {
+    "channels": ["in_app", "email"],
+    "recipients": ["sales_team"]
+  }
+}
+```
+
+Every event, channel, and recipient list is configurable from the dashboard without touching code.
+
+<Warning>
+  Secrets stored in the `tenant_settings` table with `is_encrypted = true` are encrypted at rest using `pgp_sym_encrypt` (the `pgcrypto` PostgreSQL extension). Decryption happens transparently via the `get_tenant_setting()` database function when reading. **Never log config values from the `INTEGRACIONES` module or include them in API responses** — the decrypted plaintext must only be used server-side at the moment of making an outbound API call.
+</Warning>
+
+## Dashboard URL
+
+```
+/dashboard/settings?tenant=<code>
+```
+
+Integrations are managed from the **Integrations** tab within the Settings module. Each provider card shows its current `is_active` status and a masked preview of the stored API key.

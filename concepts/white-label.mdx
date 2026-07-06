@@ -1,0 +1,267 @@
+---
+title: "White-Label Configuration: Per-Tenant Branding and Identity"
+sidebarTitle: "White Label"
+description: "Every visual and textual element in B2B Import ERP is configurable per tenant: logos, color palette, typography, PDF headers, email templates, and portal names."
+---
+
+B2B Import ERP is designed to be deployed under any company's identity without touching a single line of source code. Every tenant sees their own logo, color scheme, typography, ERP name, client portal name, browser title, email templates, and PDF headers. Company A can run it as "Siemens ERP", Company B as "ABB Service Cloud", and Company C under their own brand — all from the same codebase, configured entirely through the `tenant_settings` database table. Hardcoding any brand asset or color value directly into a component is explicitly forbidden by the platform constitution.
+
+<Note>
+  All white-label settings are persisted in the `tenant_settings` table in PostgreSQL and served to the frontend at login time. The dashboard then caches the active configuration in `localStorage` under the key `tenant_config_${tenantCode}` for zero-latency re-application on subsequent page loads.
+</Note>
+
+---
+
+## What's Configurable
+
+### Identity
+
+Core legal and contact information for the company:
+
+| Field                | Description                                      |
+| :------------------- | :----------------------------------------------- |
+| `nombre_comercial`   | Trading name displayed in the UI and documents   |
+| `razon_social`       | Legal registered name                            |
+| `nit`                | Tax ID / NIT number                              |
+| `email_corporativo`  | Corporate contact email                          |
+| `web`                | Company website URL                              |
+| `telefono_principal` | Primary phone number                             |
+| `direccion`          | Physical address                                 |
+| `ciudad` / `pais`    | City and country                                 |
+
+### Localization
+
+Regional formatting for dates, numbers, and currency:
+
+| Field                | Example             |
+| :------------------- | :------------------ |
+| `zona_horaria`       | `America/Bogota`    |
+| `idioma`             | `es`                |
+| `moneda`             | `COP`               |
+| `formato_fecha`      | `DD/MM/YYYY`        |
+| `formato_hora`       | `HH:mm`             |
+| `separador_decimal`  | `,`                 |
+| `separador_miles`    | `.`                 |
+
+### Visual Assets
+
+All URLs support absolute HTTPS paths, root-relative paths, or Base64-encoded data URIs. An empty string is valid and renders no asset.
+
+| Field             | Purpose                                  |
+| :---------------- | :--------------------------------------- |
+| `logo_claro_url`  | Logo variant for dark backgrounds        |
+| `logo_oscuro_url` | Logo variant for light backgrounds       |
+| `logo_login_url`  | Logo shown on the login / recovery page  |
+| `logo_pdf_url`    | Logo embedded in generated PDF documents |
+| `favicon_url`     | Browser tab favicon                      |
+| `splash_url`      | Loading splash screen image              |
+| `loader_url`      | Animated loader / spinner asset          |
+| `icono_movil_url` | PWA home-screen icon                     |
+
+### Color Palette
+
+Six semantic color tokens drive the entire UI. Colors are stored in the database as any standard CSS color format (Hex, HSL, RGB) and converted to HSL channels before being injected as CSS variables.
+
+| Token             | Default (AeroMax)  | Default (Apex)     | Semantic Use                |
+| :---------------- | :----------------- | :----------------- | :-------------------------- |
+| `color_primario`  | `#0284c7` (sky blue) | `#2563EB` (blue) | Buttons, links, active states |
+| `color_secundario`| `#111827`          | `#0F172A`          | Secondary actions, borders  |
+| `color_exito`     | `#10B981`          | `#10B981`          | Success states, confirmations |
+| `color_warning`   | `#F59E0B`          | `#F59E0B`          | Warnings, near-due alerts   |
+| `color_danger`    | `#EF4444`          | `#EF4444`          | Errors, destructive actions |
+| `color_info`      | `#3B82F6`          | `#3B82F6`          | Informational callouts      |
+
+### Typography
+
+| Field                  | Description                                        |
+| :--------------------- | :------------------------------------------------- |
+| `tipografia_principal` | Font family name (default: `Inter`)                |
+| `border_radius`        | Global border radius (default: `8px`)              |
+| `sombras`              | Shadow style preset: `sutil`, `media`, `fuerte`    |
+| `animaciones`          | Animation mode: `activadas` or `desactivadas`      |
+
+### ERP Branding
+
+These fields rename the product itself within each tenant's deployment:
+
+| Field                    | Description                              | AeroMax Default                       |
+| :----------------------- | :--------------------------------------- | :------------------------------------ |
+| `nombre_erp`             | Name of the ERP shown in the sidebar     | `AeroMax ERP Administrador`           |
+| `nombre_portal_cliente`  | Name shown in the client-facing portal   | `AeroMax Portal Cliente`              |
+| `titulo_navegador`       | Browser `<title>` tag                    | `AeroMax Sistemas de Ventilación Industrial` |
+
+### Landing Page
+
+| Field                  | Description                                  |
+| :--------------------- | :------------------------------------------- |
+| `landing_titulo`       | Main headline on the public landing page     |
+| `landing_subtitulo`    | Supporting subtitle text                     |
+| `landing_video_url`    | Background or hero video URL                 |
+| `dossier_url`          | Downloadable company dossier / brochure link |
+
+### Documents & Email Templates
+
+| Field                      | Description                                               |
+| :------------------------- | :-------------------------------------------------------- |
+| `plantilla_correo_asunto`  | Default email subject (supports `{{nombre_comercial}}`)   |
+| `plantilla_correo_cuerpo`  | Default email body template                               |
+| `plantilla_pdf_encabezado` | Header text printed at the top of generated PDFs         |
+| `plantilla_pdf_pie`        | Footer text printed at the bottom of generated PDFs       |
+| `firma_url`                | Authorized signatory signature image URL                  |
+| `sello_url`                | Company stamp / seal image URL                            |
+
+---
+
+## `BrandingConfig` TypeScript Interface
+
+The complete shape of a tenant's branding configuration is typed in `src/utils/branding-defaults.ts`:
+
+```ts
+export interface BrandingConfig {
+  // SUBSECCIÓN A: Información de Empresa
+  nombre_comercial: string;
+  razon_social: string;
+  nit: string;
+  direccion: string;
+  ciudad: string;
+  pais: string;
+  telefono_principal: string;
+  email_corporativo: string;
+  web: string;
+
+  // Localization
+  zona_horaria: string;
+  idioma: string;
+  moneda: string;
+  formato_fecha: string;
+  formato_hora: string;
+  separador_decimal: string;
+  separador_miles: string;
+
+  // SUBSECCIÓN B: Logos y recursos visuales
+  logo_claro_url: string;
+  logo_oscuro_url: string;
+  logo_login_url: string;
+  logo_pdf_url: string;
+  favicon_url: string;
+  splash_url: string;
+  loader_url: string;
+  icono_movil_url: string;
+  whatsapp: string;
+
+  // SUBSECCIÓN C: Colores
+  color_primario: string;
+  color_secundario: string;
+  color_exito: string;
+  color_warning: string;
+  color_danger: string;
+  color_info: string;
+
+  // SUBSECCIÓN D: Tipografía
+  tipografia_principal: string;
+  border_radius: string;
+  sombras: string;
+  animaciones: string;
+
+  // Documentos
+  firma_url: string;
+  sello_url: string;
+
+  // NUEVAS VARIABLES DE PERSONALIZACIÓN INTEGRAL (FASE 34)
+  nombre_erp: string;
+  nombre_portal_cliente: string;
+  titulo_navegador: string;
+  landing_video_url: string;
+  landing_titulo: string;
+  landing_subtitulo: string;
+  dossier_url: string;
+  plantilla_correo_asunto: string;
+  plantilla_correo_cuerpo: string;
+  plantilla_pdf_encabezado: string;
+  plantilla_pdf_pie: string;
+}
+```
+
+`getBrandingDefaults(tenantCode?)` in the same file returns a fully populated `BrandingConfig` object pre-filled with the correct values for each demo tenant, so every field always has a safe fallback.
+
+---
+
+## Color Injection: HSL CSS Variables
+
+Colors are stored in the database in any valid CSS color format and injected at runtime as **HSL channel values** into CSS custom properties on `document.documentElement`. This is what makes the entire UI respond to a tenant's palette:
+
+```css
+/* Result after injection — consumed by Tailwind CSS v4 */
+:root {
+  --primary:   199 89% 48%;   /* AeroMax sky blue */
+  --secondary: 240  5%  10%;
+  --success:   160 84% 39%;
+  --warning:    38 92% 50%;
+  --danger:      0 84% 60%;
+  --info:       217 91% 60%;
+}
+```
+
+Components reference these tokens via `var(--color-primary)` or the Tailwind utility classes that map to them (`text-primary`, `bg-primary`, `border-primary`, etc.).
+
+<Warning>
+  **Never hardcode a hex or RGB color value in a component.** All color usage must go through the CSS variable layer. This is a platform-level constitution rule — violations break the white-label contract and are caught in code review.
+</Warning>
+
+### `parseToHslChannels()` — Color Normalization
+
+The utility function `parseToHslChannels()` from `src/utils/tenant.ts` converts any CSS color format into the space-separated HSL channels string expected by the CSS variable system:
+
+```ts
+/**
+ * Parses any standard CSS color (Hex, HSL, RGB) or space-separated HSL values
+ * and converts them into the space-separated HSL channels format: "H S% L%"
+ */
+export function parseToHslChannels(color: string): string
+```
+
+**Usage example — applied when branding settings are saved:**
+
+```ts
+import { parseToHslChannels } from "@/utils/tenant";
+
+// When the user picks a color in the Settings page:
+const root = document.documentElement;
+root.style.setProperty("--primary",   parseToHslChannels(brandingState.color_primario));
+root.style.setProperty("--secondary", parseToHslChannels(brandingState.color_secundario));
+```
+
+Input formats accepted:
+
+| Input format              | Example input         | Output                |
+| :------------------------ | :-------------------- | :-------------------- |
+| Space-separated HSL       | `"199 89% 48%"`       | `"199 89% 48%"`       |
+| CSS `hsl()` function      | `"hsl(199, 89%, 48%)"` | `"199 89% 48%"`      |
+| Hex (6-digit)             | `"#0284c7"`           | `"199 89% 48%"`       |
+| Hex (3-digit)             | `"#09c"`              | Expanded + converted  |
+| Fallback (unrecognized)   | `"rebeccapurple"`     | `"240 5.9% 10%"`      |
+
+---
+
+## Runtime Loading and Caching
+
+When a user logs in or navigates to the dashboard, the branding lifecycle proceeds as follows:
+
+1. **Immediate local render** — the dashboard layout reads `localStorage.getItem('tenant_config_${tenantCode}')` synchronously to apply branding before the first paint, eliminating a flash of unstyled content.
+2. **Background DB fetch** — a Server Action queries `tenant_settings` for the current tenant and returns the full `BrandingConfig`.
+3. **CSS variable injection** — `parseToHslChannels()` is called for each color token and the result is written to `document.documentElement` via `style.setProperty`.
+4. **Cache update** — the refreshed config is written back to `localStorage.setItem('tenant_config_${tenantCode}', JSON.stringify(branding))` so the next load is instant.
+
+This pattern ensures that users always see the latest branding (fetched from DB) while avoiding any visible flash of the default theme (served from localStorage cache).
+
+---
+
+## Database Storage — `tenant_settings`
+
+White-label configuration is persisted as key-value rows in `tenant_settings`, one row per configuration key per tenant. The `module` column groups keys into logical sections (`IDENTIDAD`, `ERP`, `DOCUMENTOS`) and drives the `validate_tenant_settings_white_label` trigger, which enforces format rules before any value is committed:
+
+- **Color fields** — must be valid Hex, RGB, RGBA, HSL, HSLA, or a standard CSS color name.
+- **URL fields** — must be an absolute URL (`https://`), a root-relative path (`/`), or a Base64 data URI. Empty strings are allowed.
+- **Layout fields** — must be a valid JSON object or array.
+
+The database function `get_white_label_config(p_tenant_id)` returns the full branding configuration as a single JSONB object, and `get_my_white_label_config()` does the same using the `tenant_id` extracted directly from the caller's JWT — useful for server-side rendering contexts where only the JWT is available.

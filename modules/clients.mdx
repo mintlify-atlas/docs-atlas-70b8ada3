@@ -1,0 +1,197 @@
+---
+title: "Clients Module: Manage B2B Companies and Contacts"
+sidebarTitle: "Clients"
+description: "The Clients module manages the full lifecycle of B2B companies and contacts — from prospect intake through active, inactive, and archived states with full audit trail."
+---
+
+The Clients module is the commercial foundation of B2B Import ERP. It centralises all information about the B2B companies your tenant serves — from the moment a company is registered as a prospect through its active commercial relationship, potential inactivation, and final archival. Every mutation is fully scoped to your tenant via Row Level Security and recorded in both the technical `audit_log` and the semantic `business_events` table.
+
+---
+
+## Client Lifecycle
+
+Clients move through a defined set of states enforced by database-level triggers. No status change can be performed directly against the database; all transitions must go through domain services that validate permissions, record audit entries, and emit business events.
+
+```
+PROSPECTO ──► ACTIVO ──► INACTIVO ──► ARCHIVADO
+                │
+                ▼
+            BLOQUEADO ──► ACTIVO
+```
+
+| Transition | Condition |
+|---|---|
+| `PROSPECTO → ACTIVO` | Commercial qualification complete, client formally onboarded |
+| `ACTIVO → INACTIVO` | Client pauses operations or relationship placed on hold |
+| `ACTIVO → BLOQUEADO` | Compliance or payment issue requires immediate restriction |
+| `BLOQUEADO → ACTIVO` | Block lifted; client reinstated |
+| `INACTIVO → ACTIVO` | Client relationship reactivated |
+| `INACTIVO → ARCHIVADO` | Permanently closed; soft-deleted from active views |
+
+<Warning>
+The transitions `PROSPECTO → ARCHIVADO` and `BLOQUEADO → ARCHIVADO` are **not permitted**. A blocked client must be unblocked first; a prospect must be activated before it can be archived.
+</Warning>
+
+---
+
+## Key Fields
+
+The following fields are defined on the `clients` table (migration `20260617000002_clients_core.sql`):
+
+| Field | Type | Required | Unique | Description |
+|---|---|---|---|---|
+| `id` | `uuid` | ✅ | ✅ | Primary key, auto-generated |
+| `tenant_id` | `uuid` | ✅ | — | Owning tenant; enforced by RLS |
+| `client_code` | `varchar(50)` | ✅ | Per tenant | Auto-generated as `CLI-000001`; immutable after creation |
+| `legal_name` | `varchar(250)` | ✅ | — | Official registered company name |
+| `tax_id` | `varchar(100)` | ✅ | Per tenant | Tax identification number; unique within the tenant |
+| `city` | `varchar(100)` | — | — | City of the client's primary address |
+| `email` | `varchar(200)` | — | — | Primary commercial contact email |
+| `status` | `enum` | ✅ | — | `PROSPECTO` · `ACTIVO` · `INACTIVO` · `BLOQUEADO` · `ARCHIVADO` |
+| `assigned_user_id` | `uuid` | ✅ | — | Commercial owner; every client must have a responsible user |
+| `created_at` | `timestamp` | ✅ | — | Record creation timestamp (auto-set by trigger) |
+| `deleted_at` | `timestamp` | — | — | Populated on soft-delete; `NULL` means the record is active |
+
+<Note>
+`client_code` and `tax_id` are unique **per tenant**, so the same `tax_id` can exist across different tenants without conflict.
+</Note>
+
+---
+
+## Client Contacts
+
+Each client can have multiple contacts stored in the `client_contacts` table. One contact per client may be designated as the primary contact using the `is_primary` flag.
+
+| Field | Type | Description |
+|---|---|---|
+| `id` | `uuid` | Primary key |
+| `client_id` | `uuid` | FK to `clients.id` |
+| `first_name` | `varchar(100)` | Contact's first name (required) |
+| `last_name` | `varchar(100)` | Contact's surname |
+| `position` | `varchar(150)` | Job title or role |
+| `email` | `varchar(200)` | Contact email |
+| `phone` / `mobile` | `varchar(50)` | Direct phone numbers |
+| `is_primary` | `boolean` | Marks the main point of contact |
+| `status` | `enum` | `ACTIVO` · `INACTIVO` |
+
+<Note>
+Only **one contact per client** can hold `is_primary = true`. The trigger `trg_handle_primary_contact` automatically demotes the previous primary contact when a new one is promoted — no manual cleanup is required.
+</Note>
+
+---
+
+## Server Action Reference
+
+### `ClientRow` Interface
+
+```typescript
+interface ClientRow {
+  id: string;
+  tenant_id: string;
+  client_code: string;
+  client_type: "Empresa" | "Persona";
+  legal_name: string;
+  commercial_name: string | null;
+  tax_id: string;
+  industry: string | null;
+  email: string | null;
+  phone: string | null;
+  country: string;
+  city: string | null;
+  status: "PROSPECTO" | "ACTIVO" | "INACTIVO" | "BLOQUEADO" | "ARCHIVADO";
+  assigned_user_id: string;
+  created_at: string;
+  deleted_at: string | null;
+}
+```
+
+### Available Actions
+
+<CardGroup cols={2}>
+  <Card title="getClients" icon="list">
+    **`getClients(tenantCode?)`**
+
+    Returns all non-deleted clients for the resolved tenant, ordered by creation date descending.
+
+    ```typescript
+    const clients = await getClients("acme");
+    ```
+  </Card>
+  <Card title="createClient" icon="plus">
+    **`createClient(tenantCode, clientData)`**
+
+    Creates a new client in `PROSPECTO` status. The `client_code` is auto-generated by the database trigger as `CLI-XXXXXX`. An audit log entry is written automatically via `process_audit_log()`.
+
+    ```typescript
+    const client = await createClient("acme", {
+      legal_name: "Industrias XYZ S.A.",
+      tax_id: "900123456-7",
+      country: "Colombia",
+      assigned_user_id: userId,
+    });
+    ```
+  </Card>
+</CardGroup>
+
+---
+
+## Audit Events
+
+The system records two independent audit layers for every client mutation.
+
+### Technical Audit (`audit_log`)
+
+Driven by the `audit_clients_trigger` which fires `process_audit_log()` after every `INSERT`, `UPDATE`, or `DELETE`:
+
+| SQL Operation | `event_code` |
+|---|---|
+| `INSERT` | `CLIENTS_CREATE` |
+| `UPDATE` | `CLIENTS_UPDATE` |
+
+Physical `DELETE` operations are blocked at the RLS policy level for tenant users. A Super Admin purge would emit `CLIENTS_DELETE`.
+
+### Business Events (`business_events`)
+
+Semantic events emitted by `dispatch_client_events()` after each meaningful state change:
+
+| Event Code | Trigger Condition | Payload Fields |
+|---|---|---|
+| `CLIENT_CREATED` | New client registered | `client_code`, `legal_name`, `tax_id`, `status`, `assigned_user_id` |
+| `CLIENT_UPDATED` | General data fields changed | `changes` object with `old`/`new` per field |
+| `CLIENT_STATUS_CHANGED` | `status` column updated | `old_status`, `new_status` |
+| `CLIENT_ARCHIVED` | Status set to `ARCHIVADO` | `client_code`, `legal_name`, `archived_at` |
+| `CLIENT_BLOCKED` | Status set to `BLOQUEADO` | `block_reason`, `blocked_at` |
+| `CLIENT_UNBLOCKED` | Status changed away from `BLOQUEADO` | `unblock_reason`, `unblocked_at` |
+| `CLIENT_ASSIGNED` | `assigned_user_id` changed | `old_assigned_user_id`, `new_assigned_user_id` |
+
+Contact-level events (`CONTACT_CREATED`, `CONTACT_UPDATED`, `CONTACT_DELETED`, `CONTACT_PRIMARY_CHANGED`) and site events (`CLIENT_SITE_CREATED`, `CLIENT_SITE_UPDATED`, `CLIENT_SITE_DELETED`) are emitted by their respective triggers.
+
+---
+
+## RBAC — Role-Based Access
+
+Access to the Clients module is governed by Supabase RLS policies and database-level permission triggers.
+
+| Action | Roles Permitted |
+|---|---|
+| **View clients** | All authenticated users of the tenant (`clients_select_tenant`) |
+| **Create client** | `EJECUTIVO_COMERCIAL`, `DIRECTOR_COMERCIAL`, `GERENTE_GENERAL`, `SUPER_ADMIN` |
+| **Edit client** | `EJECUTIVO_COMERCIAL`, `DIRECTOR_COMERCIAL`, `GERENTE_GENERAL`, `SUPER_ADMIN` |
+| **Change status** | `EJECUTIVO_COMERCIAL`, `DIRECTOR_COMERCIAL`, `GERENTE_GENERAL`, `SUPER_ADMIN` |
+| **View soft-deleted records** | `AUDITOR`, `SUPER_ADMIN` |
+
+<Warning>
+RLS policies enforce `tenant_id` isolation at the database row level. It is impossible for a user in tenant A to read or write records belonging to tenant B, regardless of the application layer.
+</Warning>
+
+---
+
+## Dashboard
+
+Navigate to the Clients dashboard for your tenant:
+
+```
+/dashboard/clients?tenant=<code>
+```
+
+Replace `<code>` with your tenant's slug (e.g. `/dashboard/clients?tenant=acme`).

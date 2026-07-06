@@ -1,0 +1,139 @@
+---
+title: "Environment Variables: Configuration Reference for Deployment"
+sidebarTitle: "Environment"
+description: "All environment variables required to run B2B Import ERP. Supabase credentials are required; optional variables enable specific integrations."
+---
+
+B2B Import ERP reads its runtime configuration exclusively from environment variables. Three Supabase credentials are mandatory — the app will not start without them. All other variables are optional and activate specific features when present. In local development these values go in `.env.local`; in production they are injected as secrets through your hosting provider (Vercel, Railway, etc.).
+
+## Required Variables
+
+<ParamField body="NEXT_PUBLIC_SUPABASE_URL" type="string" required>
+  Your Supabase project URL, e.g. `https://abcdef.supabase.co`. This value is embedded in the client bundle and exposed to the browser — it identifies which Supabase project to connect to for all API calls.
+</ParamField>
+
+<ParamField body="NEXT_PUBLIC_SUPABASE_ANON_KEY" type="string" required>
+  The Supabase anonymous (public) key for your project. Used for all client-side Supabase operations — authentication, real-time subscriptions, and Row Level Security–filtered data fetches. This key is safe to expose to the browser because RLS policies restrict what an anonymous or authenticated user can access.
+</ParamField>
+
+<ParamField body="SUPABASE_SERVICE_ROLE_KEY" type="string" required>
+  The Supabase service role key. This key **bypasses all Row Level Security policies** and grants unrestricted access to every table. It is used exclusively in server-side Next.js Server Actions via the `supabaseAdmin` client. **Never prefix this with `NEXT_PUBLIC_` and never include it in client-side code.**
+</ParamField>
+
+<Warning>
+  `SUPABASE_SERVICE_ROLE_KEY` must never be assigned to a `NEXT_PUBLIC_`-prefixed variable. Any variable with the `NEXT_PUBLIC_` prefix is bundled into the browser JavaScript and becomes publicly readable. Exposing the service role key would allow any visitor to bypass RLS, read all tenant data, and write to any table without restriction.
+</Warning>
+
+## Database Connection Variables
+
+These variables are read by migration scripts and standalone test scripts that use the `pg` PostgreSQL client directly (rather than the Supabase JS client). They are **not** used by the Next.js application itself.
+
+<ParamField body="DATABASE_URL" type="string">
+  Direct PostgreSQL connection string for running scripts with the `pg` package. Either `DATABASE_URL` or `SUPABASE_DB_URL` is accepted. Example: `postgresql://postgres:[password]@aws-0-us-west-2.pooler.supabase.com:5432/postgres`.
+</ParamField>
+
+<ParamField body="SUPABASE_DB_URL" type="string">
+  Alternative name for the direct PostgreSQL connection string. Used by migration tooling. Either this or `DATABASE_URL` is sufficient.
+</ParamField>
+
+<Note>
+  The test connection script (`scripts/test-conn.ts`) connects directly via the `pg` client using host, port, user, password, and database parameters. Provide at least one of the above connection strings when running migration or validation scripts outside of the Supabase dashboard.
+</Note>
+
+## Optional Variables
+
+<ParamField body="NEXT_PUBLIC_SITE_URL" type="string">
+  The public base URL of the deployment, e.g. `https://app.b2bimport.co`. Used to construct absolute links inside transactional emails (password reset, invitation, notifications). If omitted, email links may default to `localhost` in development.
+</ParamField>
+
+<ParamField body="SUPABASE_URL" type="string">
+  Fallback non-public alias for `NEXT_PUBLIC_SUPABASE_URL`. Accepted by test scripts (`test-clients.ts`, `test-quotes.ts`, etc.) that run outside the Next.js runtime and do not have access to `NEXT_PUBLIC_` variables. You only need this if running scripts in an environment where `NEXT_PUBLIC_` vars are not forwarded.
+</ParamField>
+
+## How Supabase Clients Are Initialized
+
+The file `src/utils/supabase.ts` exports two pre-configured Supabase client instances used throughout the application:
+
+```typescript
+import { createClient } from '@supabase/supabase-js';
+
+const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || process.env.SUPABASE_URL || '';
+const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || process.env.SUPABASE_ANON_KEY || '';
+const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY || '';
+
+// Client-safe instance (uses public anon key)
+export const supabase = createClient(supabaseUrl, supabaseAnonKey);
+
+// Server-only instance (uses service role key to bypass RLS in Server Actions)
+export const supabaseAdmin = createClient(supabaseUrl, supabaseServiceKey, {
+  auth: {
+    persistSession: false,
+    autoRefreshToken: false,
+  },
+});
+```
+
+<CardGroup cols={2}>
+  <Card title="supabase (client)" icon="user">
+    Initialized with the **anon key**. Respects all RLS policies — users only see data belonging to their tenant. Safe to use in React components, client components, and public-facing routes.
+  </Card>
+  <Card title="supabaseAdmin (server)" icon="shield">
+    Initialized with the **service role key** with session persistence disabled. Bypasses RLS entirely. Use only in Next.js Server Actions, API routes, and migration scripts. Never import this in client components.
+  </Card>
+</CardGroup>
+
+## Sample `.env.local` File
+
+Copy this template to `.env.local` in your project root and fill in your actual Supabase project values:
+
+```bash
+# Required — Supabase project credentials
+NEXT_PUBLIC_SUPABASE_URL=https://your-project.supabase.co
+NEXT_PUBLIC_SUPABASE_ANON_KEY=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
+SUPABASE_SERVICE_ROLE_KEY=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
+
+# Optional — database scripts (migration and test scripts)
+DATABASE_URL=postgresql://postgres:[password]@aws-0-us-west-2.pooler.supabase.com:5432/postgres
+
+# Optional — absolute URLs in emails
+NEXT_PUBLIC_SITE_URL=https://app.b2bimport.co
+```
+
+<Note>
+  `.env.local` is listed in `.gitignore` by default in Next.js projects. Never commit it to version control. Use your CI/CD provider's secrets management (Vercel Environment Variables, GitHub Actions secrets, etc.) to inject these values in production.
+</Note>
+
+## Next.js Configuration
+
+The `next.config.ts` file currently uses the default Next.js 16 configuration without custom overrides:
+
+```typescript
+import type { NextConfig } from "next";
+
+const nextConfig: NextConfig = {
+  /* config options here */
+};
+
+export default nextConfig;
+```
+
+All Next.js 16 defaults apply: React 19, Turbopack support, Server Actions enabled, and the App Router. If you add image domains, custom headers, or server action body size limits as the project grows, document those changes here.
+
+## Production Checklist
+
+Before deploying to a production environment, verify the following:
+
+<CardGroup cols={2}>
+  <Card title="Auth Configuration" icon="lock">
+    Email confirmation is enabled in the Supabase Auth settings. Users must verify their email address before gaining access.
+  </Card>
+  <Card title="Secret Management" icon="key">
+    `SUPABASE_SERVICE_ROLE_KEY` is stored as an environment secret in your hosting provider — **not** committed to git or exposed in any client bundle.
+  </Card>
+  <Card title="RLS Enforcement" icon="database">
+    Row Level Security is enabled on every table. Each table must have explicit policies for `SELECT`, `INSERT`, `UPDATE`, and `DELETE` scoped to `tenant_id`.
+  </Card>
+  <Card title="Seed Data Isolation" icon="seedling">
+    The `seed_master_data` migration is applied only to development and staging databases. Demo data (25 companies, 106 users) must **not** be applied to production.
+  </Card>
+</CardGroup>

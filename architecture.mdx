@@ -1,0 +1,220 @@
+---
+title: "System Architecture: Layered Modular ERP Design"
+sidebarTitle: "Architecture"
+description: "Learn how B2B Import ERP is structured across presentation, server actions, domain logic, and database layers with strict module boundaries."
+---
+
+B2B Import ERP follows a strict four-layer architecture designed for long-term maintainability in enterprise contexts. The fundamental constraint is that the presentation layer is never allowed to communicate directly with the database: every read and write flows downward through Server Actions and utility modules before it reaches Supabase. This ensures that business rules, tenant isolation, permission checks, and audit recording are always enforced — regardless of which UI surface initiates the operation.
+
+## Layer Diagram
+
+```
+UI (Next.js App Router — Server & Client Components)
+  ↓
+Server Actions (/app/actions/*.ts)
+  ↓
+Domain Logic (utils/, business rules, scoring engines)
+  ↓
+Supabase Client (supabaseAdmin — Service Role)
+  ↓
+PostgreSQL + RLS (Row Level Security policies)
+```
+
+The flow is strictly one-directional. A UI component may call a Server Action; a Server Action may call a utility module; a utility module calls `supabaseAdmin`. No layer skips its immediate predecessor.
+
+<Warning>
+  Direct Supabase calls from React components are **prohibited for business operations**. The `supabase` (anon key) client exported from `src/utils/supabase.ts` is reserved for public-read operations such as fetching tenant branding tokens. All mutations and authenticated reads must go through `supabaseAdmin` inside a Server Action.
+</Warning>
+
+---
+
+## Tech Stack
+
+| Layer | Technology | Purpose |
+|---|---|---|
+| Presentation | Next.js 16 App Router | SSR pages, React Server Components, and selective Client Components |
+| Server Actions | TypeScript Server Actions | Business logic, auth, tenant resolution, audit recording |
+| Database client | `@supabase/supabase-js` v2 | Type-safe queries with automatic RLS enforcement |
+| Database | PostgreSQL (Supabase managed) | Multi-tenant relational data with RLS policies |
+| Auth | Supabase Auth (GoTrue) | JWT-based authentication and session management |
+| UI Components | Radix UI + Tailwind CSS v4 | Accessible, headless primitives styled with utility classes |
+| Animations | Framer Motion | Subtle transitions and micro-interactions (< 200 ms, no bounces) |
+| Forms | React Hook Form + Zod | Type-safe form state and server-validated schema declarations |
+| Charts | Recharts | Dashboard KPIs and analytics widgets |
+| PDF Export | jsPDF (dynamic import) | Client-side multi-page document generation without SSR breakage |
+| Excel Export | XLSX | Spreadsheet exports for reports and data dumps |
+| Icons | Lucide React | Consistent icon set across all modules |
+
+<Note>
+  Tailwind CSS v4 is configured via `@tailwindcss/postcss` — there is no `tailwind.config.js`. All theme tokens (colors, spacing, typography) are defined as CSS custom properties and injected dynamically from `tenant_settings` to support white-label branding without recompilation.
+</Note>
+
+---
+
+## Module Map
+
+The platform is organised into 15 functional modules grouped by business domain. Every module owns its own Server Actions file, its own database tables (with `tenant_id` on every row), and its own test script.
+
+<CardGroup cols={2}>
+  <Card title="Core / Tenants" icon="building-columns">
+    Tenant provisioning, site and area hierarchies, white-label configuration, and the `tenant_settings` key-value store.
+  </Card>
+  <Card title="Users / Roles (RBAC)" icon="shield-halved">
+    User management, role definitions, permission matrices, and per-user exceptions scoped to tenants.
+  </Card>
+  <Card title="Clients" icon="address-book">
+    B2B client profiles, contact management, tax IDs, industry classification, and client-level audit history.
+  </Card>
+  <Card title="Requirements" icon="file-lines">
+    Technical requirement capture from clients, document attachments (stored as paths/URLs, never as BLOBs), and status tracking.
+  </Card>
+  <Card title="Quotes" icon="file-invoice-dollar">
+    Itemised quotations linked to requirements, line-item pricing, discount rules, and multi-version history.
+  </Card>
+  <Card title="Approvals" icon="circle-check">
+    Independent approval engine used by quotes, invoices, and contracts. Supports multi-level chains and rejection reasoning.
+  </Card>
+  <Card title="Jobs (Work Orders)" icon="screwdriver-wrench">
+    Operational job lifecycle from scheduling through execution, technician assignment, activity log, and completion.
+  </Card>
+  <Card title="Inventory" icon="boxes-stacking">
+    Item master, multi-warehouse stock levels, reservation tracking, and movement history (Entry / Exit / Transfer).
+  </Card>
+  <Card title="Invoices" icon="receipt">
+    Invoice creation from quotes or standalone, line items, tax calculation, and status transitions (Draft → Issued → Paid).
+  </Card>
+  <Card title="Payments" icon="credit-card">
+    Payment recording against invoices, partial payment tracking, advance management, and balance reconciliation.
+  </Card>
+  <Card title="Warranties" icon="shield-check">
+    Post-sale warranty claim registration, intervention history, and SLA status tracking per client.
+  </Card>
+  <Card title="CRM / Leads" icon="chart-line">
+    Prospect pipeline, lead scoring (`CALIENTE` / `TIBIO` / `FRÍO` / `SPAM`), and conversion tracking to clients.
+  </Card>
+  <Card title="Marketing / Website" icon="globe">
+    Public-facing tenant website, product catalog, and the interactive pre-engineering wizard (WizardStepper).
+  </Card>
+  <Card title="Dashboard / Analytics" icon="chart-bar">
+    Configurable KPI widgets, financial summaries, and cross-module analytics charts powered by Recharts.
+  </Card>
+  <Card title="Settings / White-Label" icon="sliders">
+    Tenant branding (logo, primary color, secondary color), integration credentials (encrypted at rest), and feature flags.
+  </Card>
+</CardGroup>
+
+---
+
+## Key Architectural Rules
+
+These rules are enforced at code-review level and documented in the Technical Constitution (`docs/03_protocolo/00_CONSTITUCION_TECNICA.md`). Violations are treated as bugs, not style preferences.
+
+**1. Never access the database directly from UI components.**
+React components import zero Supabase clients for business operations. The only permitted direct client import in a component is the public `supabase` (anon key) instance for non-sensitive read operations like fetching the tenant's CSS brand tokens before server rendering.
+
+**2. All business logic lives in Server Actions and utility modules.**
+The `src/app/actions/` directory contains one file per module (e.g., `quotes.ts`, `payments.ts`, `wizard.ts`). Domain utilities live in `src/utils/` (e.g., `pricing.ts`, `engineering.ts`, `tenant.ts`). No business rule is embedded in a component's event handler.
+
+**3. Tenant isolation is enforced at the RLS layer — application-level filtering is supplementary.**
+Every table has a `tenant_id UUID NOT NULL` column. PostgreSQL RLS policies enforce `tenant_id = auth.uid()` or the equivalent service-role bypass for admin operations. Application-level `.eq('tenant_id', tenantId)` filters are added as a defence-in-depth measure, but they are not the security boundary.
+
+**4. Every state transition must go through domain services.**
+State changes (e.g., quote status `DRAFT → PENDING_APPROVAL`, invoice status `ISSUED → PAID`) are handled by Server Actions that: (a) validate the caller has the required role, (b) verify the transition is legal given the current state, (c) write the new state, and (d) insert a row into `audit_log`. No direct `UPDATE status = 'X'` from the UI is permitted.
+
+**5. Client Components (`"use client"`) are allowed only for interactive UI.**
+The two authorised `"use client"` components are `WizardStepper.tsx` (real-time CFM calculations, 60 fps counters, dynamic PDF rendering) and `CatalogView.tsx` (interactive product filtering and autocomplete). All other pages and layouts are React Server Components by default.
+
+**6. Soft delete everywhere — no physical deletes.**
+All operational tables include `deleted_at TIMESTAMPTZ` and `deleted_by UUID` columns. The application uses `.is('deleted_at', null)` filters on every read. `DELETE` statements are prohibited in application code.
+
+**7. Zero hardcoded visual tokens.**
+Brand colors, logos, and theme variables are read from `tenant_settings` and injected as CSS custom properties (`var(--color-primary)`, `var(--color-secondary)`). Hardcoding hex values like `#0284c7` directly in component class lists is a constitutional violation.
+
+---
+
+## Directory Structure
+
+```
+src/
+├── app/
+│   ├── (auth)/                   # Auth routes (login, recovery, reset-password)
+│   │   ├── login/
+│   │   ├── recovery/
+│   │   └── reset-password/
+│   ├── (dashboard)/              # Protected dashboard routes
+│   │   └── dashboard/
+│   ├── actions/                  # All Server Actions — one file per module
+│   │   ├── branding.ts           # Tenant branding & white-label
+│   │   ├── catalog.ts            # Product catalog queries
+│   │   ├── catalog-chat.ts       # AI-free catalog assistant
+│   │   ├── exports-finance.ts    # PDF/Excel financial exports
+│   │   ├── inventory-purchases.ts
+│   │   ├── leads.ts              # CRM lead management
+│   │   ├── leads-erp.ts          # Lead-to-ERP conversion
+│   │   ├── payments.ts
+│   │   ├── quotes.ts
+│   │   ├── requirements.ts
+│   │   └── wizard.ts             # Pre-engineering wizard submission
+│   ├── actions.ts                # Core shared actions (clients, jobs, invoices, settings)
+│   ├── api/
+│   │   └── webhooks/             # Inbound webhook handlers
+│   ├── portal/                   # Client self-service portal
+│   └── wizard/                   # Public pre-engineering wizard pages
+├── components/
+│   ├── marketing/                # Landing page and public-facing components
+│   └── ui/                       # Shared design-system primitives
+│       ├── avatar.tsx
+│       ├── badge.tsx
+│       ├── button.tsx
+│       ├── checkbox.tsx
+│       ├── dialog.tsx
+│       ├── form.tsx
+│       ├── input.tsx
+│       ├── label.tsx
+│       ├── select.tsx
+│       ├── sheet.tsx
+│       ├── skeleton.tsx
+│       ├── spinner.tsx
+│       ├── table.tsx
+│       └── textarea.tsx
+├── types/                        # Shared TypeScript type declarations
+└── utils/                        # Domain utilities and Supabase clients
+    ├── branding-defaults.ts      # Fallback brand tokens
+    ├── cn.ts                     # Tailwind class merging helper
+    ├── engineering.ts            # CFM / pressure drop calculations
+    ├── file-exports.ts           # PDF and Excel generation helpers
+    ├── pricing.ts                # Quote and margin calculation rules
+    ├── supabase.ts               # supabase (anon) + supabaseAdmin (service role)
+    └── tenant.ts                 # Tenant resolution and settings helpers
+```
+
+<Tip>
+  The `supabase.ts` utility exports two clients: `supabase` (anon key, RLS-enforced, safe for public reads) and `supabaseAdmin` (service role, RLS-bypassed, server-only). Import only `supabaseAdmin` inside Server Actions. Never import `supabaseAdmin` in any file that could be bundled client-side.
+</Tip>
+
+---
+
+## Supabase Client Instantiation
+
+The two Supabase client instances are defined in `src/utils/supabase.ts`:
+
+```typescript
+import { createClient } from '@supabase/supabase-js';
+
+const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || '';
+const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || '';
+const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY || '';
+
+// Client-safe instance (uses public anon key — respects RLS)
+export const supabase = createClient(supabaseUrl, supabaseAnonKey);
+
+// Server-only instance (uses service role key — bypasses RLS in Server Actions)
+export const supabaseAdmin = createClient(supabaseUrl, supabaseServiceKey, {
+  auth: {
+    persistSession: false,
+    autoRefreshToken: false,
+  },
+});
+```
+
+`supabaseAdmin` disables session persistence and token refresh because Server Actions run in a stateless server context — there is no user session to persist between requests. All tenant scoping is done explicitly via `tenant_id` equality filters in every query, providing defence-in-depth on top of the RLS layer.

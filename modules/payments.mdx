@@ -1,0 +1,228 @@
+---
+title: "Payments Module: Wompi Gateway Integration and Webhooks"
+sidebarTitle: "Payments"
+description: "Process invoice payments through the Wompi payment gateway. Receive real-time payment status updates via webhooks and reconcile payments automatically."
+---
+
+The Payments module connects B2B Import ERP to **Wompi** — Colombia's leading payment gateway — to collect invoice payments online. When a client receives an emitted invoice, the platform generates a Wompi-hosted checkout session and attaches the URL to the invoice. After the client completes payment, Wompi delivers a webhook event to the platform, which then creates a payment record, updates the invoice status, and records a reconciliation entry — all automatically, with no manual intervention required.
+
+---
+
+## Wompi Checkout Flow
+
+```
+Invoice (EMITIDA)
+     │
+     ▼
+createWompiCheckout()
+     │   ┌─────────────────────────────────────────┐
+     │   │ 1. Reads payment_gateways config         │
+     │   │ 2. Generates unique reference (INV-…)    │
+     │   │ 3. Creates payment_transactions (PENDING) │
+     │   │ 4. Stamps payment_link on invoice        │
+     │   └─────────────────────────────────────────┘
+     │
+     ▼
+Client redirected to Wompi hosted checkout
+     │
+     ▼  (client pays)
+POST /api/webhooks/wompi  ← Wompi sends event
+     │
+     ▼
+processWompiWebhook()
+     │   ┌─────────────────────────────────────────────────────┐
+     │   │ 1. Looks up transaction by reference_id             │
+     │   │ 2. Updates transaction status (APPROVED/DECLINED/…) │
+     │   │ 3. If APPROVED:                                     │
+     │   │    a. Creates payments record (APLICADO)            │
+     │   │    b. Updates invoice paid_amount + status          │
+     │   │    c. Creates payment_reconciliations entry         │
+     │   └─────────────────────────────────────────────────────┘
+     │
+     ▼
+Invoice status → PAGADA / PARCIALMENTE_PAGADA
+```
+
+---
+
+## Server Action Signatures
+
+All payment actions are Next.js Server Actions defined in `src/app/actions/payments.ts`:
+
+```typescript
+// Get active Wompi gateway configuration for a tenant
+getPaymentGateway(tenantCode?: string | null): Promise<PaymentGateway | null>
+
+// Create a Wompi checkout session for an invoice
+createWompiCheckout(
+  tenantCode: string | null,
+  invoiceId: string,
+  amount: number,           // in COP (not cents)
+  customerEmail: string,
+  customerName: string
+): Promise<{
+  transactionId: string;
+  reference: string;        // format: INV-{invoiceId[0..8]}-{timestamp}
+  checkoutUrl: string;      // Wompi hosted checkout URL
+  publicKey: string;
+  environment: string;      // 'sandbox' | 'production'
+  amount: number;
+  currency: string;         // 'COP'
+}>
+
+// Process an incoming Wompi webhook payload
+processWompiWebhook(payload: {
+  event: string;
+  data: {
+    id: string;
+    reference_id?: string;
+    status: string;             // 'APPROVED' | 'DECLINED' | 'VOIDED' | 'ERROR'
+    amount_in_cents: number;    // Wompi sends amounts in centavos
+    currency: string;
+    customer_email?: string;
+    payment_method_type?: string;
+  };
+}): Promise<{ success: boolean; status: string }>
+```
+
+<Note>
+  `createWompiCheckout()` uses the **sandbox** URL `https://sandbox.wompi.co/v1/checkout/{reference}` when `environment = 'sandbox'`. For production tenants, it uses the `api_url` value from the `payment_gateways` row. Amounts are stored in COP; Wompi's webhook delivers them in **centavos** (`amount_in_cents`), so `processWompiWebhook()` divides by 100 before storing.
+</Note>
+
+---
+
+## Webhook Endpoint
+
+The webhook handler lives at `src/app/api/webhooks/wompi/route.ts`.
+
+### `POST /api/webhooks/wompi`
+
+Accepts Wompi event payloads. The handler validates that both `event` and `data` fields are present before delegating to `processWompiWebhook()`.
+
+**Request body** (Wompi format):
+
+```bash
+curl -X POST https://your-domain.com/api/webhooks/wompi \
+  -H "Content-Type: application/json" \
+  -d '{
+    "event": "transaction.updated",
+    "data": {
+      "id": "1234567-abcd-efgh-ijkl-000000000001",
+      "reference_id": "INV-a1b2c3d4-1718000000000",
+      "status": "APPROVED",
+      "amount_in_cents": 1190000,
+      "currency": "COP",
+      "customer_email": "cliente@empresa.com",
+      "payment_method_type": "CARD"
+    },
+    "sent_at": "2026-06-17T12:00:00.000Z",
+    "timestamp": 1718625600,
+    "signature": {
+      "properties": ["data.id", "data.status", "data.amount_in_cents"],
+      "checksum": "abc123..."
+    }
+  }'
+```
+
+**Response (200 OK)**:
+
+```json
+{
+  "received": true,
+  "success": true,
+  "status": "APPROVED"
+}
+```
+
+**Response (400 Bad Request)** — when `event` or `data` is missing:
+
+```json
+{
+  "error": "Payload inválido: falta 'event' o 'data'"
+}
+```
+
+### `GET /api/webhooks/wompi`
+
+Used by Wompi's platform to verify that the endpoint is reachable during initial gateway configuration.
+
+**Response (200 OK)**:
+
+```json
+{ "status": "Wompi webhook endpoint active" }
+```
+
+---
+
+## Transaction Status Mapping
+
+| Wompi `status` | Internal `payment_transactions.status` | Invoice effect |
+|---|---|---|
+| `APPROVED` | `APPROVED` | Creates `payments` record; updates `paid_amount`; sets invoice to `PAGADA` or `PARCIALMENTE_PAGADA` |
+| `DECLINED` | `DECLINED` | No payment record; invoice remains `EMITIDA` |
+| `VOIDED` | `VOIDED` | No payment record created |
+| *(other)* | `ERROR` | No payment record created |
+
+---
+
+## Gateway Configuration
+
+Gateway credentials are stored per tenant in the `payment_gateways` table — never in environment variables. This is a hard multi-tenant requirement.
+
+| Column | Description |
+|---|---|
+| `tenant_id` | Scopes the gateway to a single tenant |
+| `gateway_type` | Always `'WOMPI'` for the Wompi integration |
+| `public_key` | Wompi public key (`pub_*`) |
+| `api_url` | Base URL — `https://sandbox.wompi.co/v1` (sandbox) or the production endpoint |
+| `environment` | `'sandbox'` or `'production'` |
+| `is_active` | Only rows where `is_active = true` are returned by `getPaymentGateway()` |
+
+`getPaymentGateway()` always queries `payment_gateways` filtering on `tenant_id`, `gateway_type = 'WOMPI'`, and `is_active = true`. If no active configuration is found, `createWompiCheckout()` throws: `"Pasarela de pagos no configurada para este tenant."`.
+
+<Warning>
+  **Never** store Wompi keys in `.env` files or shared environment variables. B2B Import ERP is a multi-tenant platform — each tenant requires its own isolated gateway configuration row in `payment_gateways`. Sharing credentials across tenants would break payment attribution and audit traceability. The `WOMPI_EVENTS_SECRET` (webhook signing key) must also be stored per tenant in the `payment_gateways` row, not in any `.env` file.
+</Warning>
+
+---
+
+## Environments
+
+| Environment | `api_url` | Use |
+|---|---|---|
+| Sandbox | `https://sandbox.wompi.co/v1` | Development and QA; no real money moves |
+| Production | Configured per tenant | Live payments in COP |
+
+To switch a tenant from sandbox to production, update their `payment_gateways` row: set `environment = 'production'`, update `api_url` to the production base URL, and replace the `public_key` with the production key provided by Wompi.
+
+---
+
+## Payment & Reconciliation Records
+
+When `processWompiWebhook()` processes an `APPROVED` event, it creates two database records atomically:
+
+1. **`payments`** row with:
+   - `payment_code`: `PAG-2026-XXXX` (auto-incremented per tenant)
+   - `payment_method`: `'Tarjeta'` (for `CARD`) or `'PSE'`
+   - `reference_number`: the Wompi transaction ID
+   - `amount`: centavos ÷ 100
+   - `status`: `'APLICADO'`
+
+2. **`payment_reconciliations`** row linking `transaction_id` → `payment_id` with `status = 'CONCILIADA'`.
+
+After creation, the `handle_payment_application` trigger recalculates `invoices.paid_amount` and advances the invoice status automatically.
+
+---
+
+## Payment History
+
+```typescript
+// Retrieve recent payments for a tenant (last 50, descending by date)
+getPaymentHistory(tenantCode?: string | null): Promise<PaymentSummary[]>
+```
+
+Returns fields: `id`, `code`, `date`, `method`, `reference`, `amount`, `status`, `invoiceCode`.
+
+<Tip>
+  Payment history is displayed in the client portal at `/portal` and in the finance dashboard at `/dashboard/invoices`. Both views are cache-revalidated by Next.js `revalidatePath()` after every webhook event, so clients see their payment confirmed in real time after the Wompi redirect.
+</Tip>

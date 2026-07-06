@@ -1,0 +1,188 @@
+---
+title: "Database Migrations: Schema History and Deployment Guide"
+sidebarTitle: "Migrations"
+description: "B2B Import ERP has 30+ ordered SQL migrations in supabase/migrations/. Apply them in sequence using Supabase CLI or the SQL editor to provision a new database."
+---
+
+All schema changes in B2B Import ERP are managed as numbered SQL migration files under `supabase/migrations/`. Each file is prefixed with a sortable timestamp so that migrations are always applied in deterministic order. The files are idempotent by convention — re-running a migration on an already-migrated database will either be a no-op (for `CREATE TABLE IF NOT EXISTS` patterns) or raise an error that can be safely ignored after inspection.
+
+<Warning>
+  Migration `20260617000001_seed_master_data.sql` inserts demo tenants, demo users, and fixture data including auto-confirmed accounts. **Do not run this migration in a production environment.** It is provided exclusively for local development and UAT environments.
+</Warning>
+
+---
+
+## Deployment Methods
+
+### Using Supabase CLI (Recommended)
+
+The Supabase CLI applies all pending migrations automatically, tracking applied migrations in the `supabase_migrations` table:
+
+```bash
+supabase db push
+```
+
+This command compares the local `supabase/migrations/` directory against what has already been applied to the linked remote project and runs only the delta.
+
+For local development with a self-hosted Supabase instance:
+
+```bash
+supabase db reset        # Drop and recreate the local DB, then apply all migrations
+supabase db reset --local
+```
+
+### Manual SQL Editor
+
+If the CLI is not available, paste each migration file into the Supabase **SQL Editor** in ascending numeric order. Start with `20260617000000_init_core.sql` and finish with the highest-numbered file.
+
+### Combined Migrations File
+
+The repository includes a pre-concatenated convenience file at the project root:
+
+```bash
+supabase_combined_migrations.sql
+```
+
+This file contains all migrations in order and can be pasted as a single SQL block into the SQL Editor for a clean-room provisioning.
+
+<Note>
+  Always apply migrations in ascending numeric order. Each file may depend on tables or functions created by earlier migrations. Out-of-order application will produce foreign-key or function-not-found errors.
+</Note>
+
+---
+
+## Migration File Reference
+
+<CardGroup cols={2}>
+  <Card title="20260617000000_init_core.sql" icon="database">
+    **Foundation.** Creates core enums (`tenant_status_enum`, `user_status_enum`, etc.), the `tenants`, `sites`, `areas`, `users`, `roles`, `permissions`, `user_roles`, `user_permissions`, and `audit_log` tables. Installs the `process_audit_log()` trigger function and all performance indexes.
+  </Card>
+  <Card title="20260617000001_seed_master_data.sql" icon="seedling">
+    **Demo fixtures.** Inserts two demo tenants (AeroMax / Apex), 106 pre-confirmed user accounts, and reference data. **Development/UAT only — do not run in production.**
+  </Card>
+  <Card title="20260617000002_clients_core.sql" icon="building">
+    **Clients.** Creates `clients`, `client_sites`, `client_contacts`, and `business_events` tables. Adds the `handle_client_code()` trigger for auto-generating `CLI-000001` codes and `handle_primary_contact()` for enforcing a single primary contact per client.
+  </Card>
+  <Card title="20260617000003_requirements_core.sql" icon="clipboard-list">
+    **Requirements.** Creates `requirements` and `diagnostic_reports` tables. Diagnostic reports store the CFM calculation and price estimation output from the wizard.
+  </Card>
+  <Card title="20260617000004_quotes_core.sql" icon="file-invoice">
+    **Quotes.** Creates `quotes` and `quote_items` tables with status workflow and auto-generated `COT-XXXXXX` codes.
+  </Card>
+  <Card title="20260617000005_approvals_core.sql" icon="check-circle">
+    **Approvals.** Creates `approval_requests` and approval workflow tables for multi-step document sign-off (quotes, invoices, purchase orders).
+  </Card>
+  <Card title="20260617000006_jobs_core.sql" icon="wrench">
+    **Jobs.** Creates `jobs` and `job_activities` tables for field service work order management.
+  </Card>
+  <Card title="20260617000007_inventory_core.sql" icon="boxes-stacked">
+    **Inventory.** Creates `inventory_items`, `warehouses`, `inventory_stock`, and `inventory_movements` tables with warehouse-level stock tracking.
+  </Card>
+  <Card title="20260617000008_invoices_core.sql" icon="receipt">
+    **Invoices.** Creates `invoices`, `invoice_items`, `payments`, `payment_transactions`, and `payment_reconciliations` tables. Includes the payment status workflow.
+  </Card>
+  <Card title="20260617000010_warranties_core.sql" icon="shield-check">
+    **Warranties.** Creates `warranties` and `warranty_claims` tables for post-sale warranty tracking.
+  </Card>
+  <Card title="20260617000011_website_core.sql" icon="globe">
+    **Website CMS.** Creates website content tables and landing page configuration (hero text, video URL, sections).
+  </Card>
+  <Card title="20260617000012_wizard_core.sql" icon="wand-magic-sparkles">
+    **Wizard.** Creates `wizard_sessions` and related tables for persisting multi-step wizard state across browser sessions.
+  </Card>
+  <Card title="20260617000013_crm_core.sql" icon="users">
+    **CRM / Leads.** Creates the `leads` table and CRM pipeline configuration. Establishes the scoring fields (`score`, `risk_level`) used by `calculateLeadScore()`.
+  </Card>
+  <Card title="20260617000014_marketing_core.sql" icon="megaphone">
+    **Marketing.** Creates `campaigns`, `campaign_contacts`, and marketing analytics tables.
+  </Card>
+  <Card title="20260617000015_dashboards_core.sql" icon="chart-bar">
+    **Dashboards.** Creates materialized KPI views and dashboard metric queries for the analytics module.
+  </Card>
+  <Card title="20260617000016_costs_core.sql" icon="coins">
+    **Job Costs.** Creates job cost tracking tables for materials, labour, and overhead per work order.
+  </Card>
+  <Card title="20260617000017_profitability_core.sql" icon="chart-line">
+    **Profitability.** Creates profitability analysis views aggregating revenue vs. cost per client, job, and period.
+  </Card>
+  <Card title="20260617000018_documents_core.sql" icon="folder-open">
+    **Documents.** Creates `document_attachments` and `media_assets` tables for file storage references (Supabase Storage paths).
+  </Card>
+  <Card title="20260617000019_notifications_core.sql" icon="bell">
+    **Notifications.** Creates `notification_queue` and `notification_delivery_log` tables for the in-app and email notification system.
+  </Card>
+  <Card title="20260617000020_security_audit_core.sql" icon="shield">
+    **Security Audit.** Creates `user_access_logs` with immutability enforcement triggers (physical DELETE is blocked). Adds granular RLS policies for AUDITOR, GERENTE, and self-service access log reads.
+  </Card>
+  <Card title="20260617000021_performance_hardening.sql" icon="bolt">
+    **Performance.** Adds composite indexes for common query patterns across all operational tables. No schema changes — index-only migration.
+  </Card>
+  <Card title="20260617000022_uat_validation.sql" icon="flask">
+    **UAT Helpers.** Installs SQL helper functions for user-acceptance testing: data validation assertions, constraint checks, and test-data cleanup utilities.
+  </Card>
+  <Card title="20260617000023_release_monitoring.sql" icon="activity">
+    **Health Checks.** Creates `v_system_health` and related views for monitoring database size, row counts, and index health via the admin panel.
+  </Card>
+  <Card title="20260617000031_settings_core.sql" icon="sliders">
+    **Tenant Settings.** Creates the `tenant_settings` key-value store with `(tenant_id, module, config_key)` unique constraint. Adds the `get_tenant_setting(p_tenant_id, p_module, p_key)` RPC for decrypting encrypted settings.
+  </Card>
+  <Card title="20260617000032_white_label.sql" icon="palette">
+    **White Label.** Creates branding configuration tables and the `tenant_branding_version` snapshot history table.
+  </Card>
+  <Card title="20260617000033_integrations.sql" icon="plug">
+    **Integrations.** Creates `payment_gateways` and `integration_credentials` tables for third-party provider configuration (Wompi, Stripe, etc.).
+  </Card>
+  <Card title="20260617000034_advanced_admin.sql" icon="cog">
+    **Advanced Admin.** Adds advanced admin panel features: tenant suspension workflows, bulk operations, and platform-level reporting views.
+  </Card>
+  <Card title="20260617000035_industrial_cms.sql" icon="industry">
+    **Industrial CMS.** Creates the full product catalog hierarchy: `product_categories`, `product_subcategories`, `product_families`, `product_series`, `products`, `product_specifications`, `product_images`, `product_documents`, `product_files`, and `seo_metadata` tables.
+  </Card>
+  <Card title="20260619000036_fix_leads_schema.sql" icon="wrench">
+    **Leads Schema Patch.** Adds missing columns to the `leads` table (`name`, `company_name`, `phone`, `email`, `urgency`, `lead_score`) to support the public contact form submission path in `submitContactForm()`.
+  </Card>
+  <Card title="20260620000037_branding_version.sql" icon="history">
+    **Branding Version Tracking.** Adds version-number management and snapshot columns to `tenant_branding_version`. Enables the restore-to-previous-version feature in `restoreBrandingVersion()`.
+  </Card>
+</CardGroup>
+
+---
+
+## Deployment Order
+
+```
+20260617000000_init_core.sql
+20260617000001_seed_master_data.sql   ← DEV/UAT ONLY
+20260617000002_clients_core.sql
+20260617000003_requirements_core.sql
+20260617000004_quotes_core.sql
+20260617000005_approvals_core.sql
+20260617000006_jobs_core.sql
+20260617000007_inventory_core.sql
+20260617000008_invoices_core.sql
+20260617000010_warranties_core.sql
+20260617000011_website_core.sql
+20260617000012_wizard_core.sql
+20260617000013_crm_core.sql
+20260617000014_marketing_core.sql
+20260617000015_dashboards_core.sql
+20260617000016_costs_core.sql
+20260617000017_profitability_core.sql
+20260617000018_documents_core.sql
+20260617000019_notifications_core.sql
+20260617000020_security_audit_core.sql
+20260617000021_performance_hardening.sql
+20260617000022_uat_validation.sql
+20260617000023_release_monitoring.sql
+20260617000031_settings_core.sql
+20260617000032_white_label.sql
+20260617000033_integrations.sql
+20260617000034_advanced_admin.sql
+20260617000035_industrial_cms.sql
+20260619000036_fix_leads_schema.sql
+20260620000037_branding_version.sql
+```
+
+<Tip>
+  Note the jump from `000008` to `000010` — migration `000009` was reserved but never used. The numeric ordering still works correctly because the prefix sort is lexicographic.
+</Tip>

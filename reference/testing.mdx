@@ -1,0 +1,153 @@
+---
+title: "Testing: Module Test Scripts and UAT Procedures"
+sidebarTitle: "Testing"
+description: "B2B Import ERP includes TypeScript test scripts for every module. Run them against a seeded development database to validate end-to-end functionality."
+---
+
+B2B Import ERP ships with a dedicated TypeScript test script for every functional module. Each script is invoked via `ts-node` and connects to Supabase using the `pg` client or the Supabase JS client directly — no testing framework is required. The scripts validate SQL migrations syntactically (table definitions, triggers, RLS policies) when environment credentials are absent, and execute full live integration tests — including CRUD operations, state machine transitions, trigger behavior, and cross-tenant RLS isolation — when credentials are provided.
+
+## Prerequisites for Testing
+
+Before running any test script, ensure the following are in place:
+
+<CardGroup cols={3}>
+  <Card title="Migrations Applied" icon="database">
+    All Supabase migrations have been executed against your development database, including the `seed_master_data` migration that creates demo companies, roles, and users.
+  </Card>
+  <Card title="Environment Credentials" icon="key">
+    `.env.local` contains valid `NEXT_PUBLIC_SUPABASE_URL` (or `SUPABASE_URL`) and `SUPABASE_SERVICE_ROLE_KEY`. Scripts fall back to static SQL validation if these are absent.
+  </Card>
+  <Card title="Dev Server Not Required" icon="code">
+    Test scripts run as standalone Node.js processes via `ts-node`. You do not need `npm run dev` to be running when executing scripts.
+  </Card>
+</CardGroup>
+
+<Warning>
+  Test scripts insert, mutate, and delete real data. Always run them against a dedicated **development or staging database**. Never point test scripts at a production Supabase project — they create and clean up temporary tenants and users, but failures mid-run can leave partial data behind.
+</Warning>
+
+## Available Test Scripts
+
+Every module has a corresponding npm script that maps to a `ts-node` invocation of its script file under `scripts/`.
+
+| Module | Command | What It Tests |
+|---|---|---|
+| Multi-tenancy | `npm run test:multitenant` | RLS isolation between tenants — verifies that data inserted for Tenant A is invisible to Tenant B queries |
+| Clients | `npm run test:clients` | Client CRUD, auto-generated `client_code` sequence, `tax_id` uniqueness per tenant, contact primary-swap trigger, soft deletes, and `business_events` emission |
+| Requirements | `npm run test:requirements` | Requirement creation and full state machine transitions (BORRADOR → NUEVO → EN_REVISION → DIAGNOSTICO → COTIZACION → APROBACION → OT_GENERADA) |
+| Quotes | `npm run test:quotes` | Quote creation, line-item auto-calculation, header total rollup triggers, versioning (previous version set to VENCIDA), rejection/cancellation traceability, and integration with requirements state machine |
+| Approvals | `npm run test:approvals` | Approval workflow creation, multi-level escalation, resolution (approve/reject), and audit trail |
+| Jobs | `npm run test:jobs` | Work order lifecycle from creation through scheduling, start, pause, completion, and closure, including evidence attachment |
+| Inventory | `npm run test:inventory` | Stock movements (entrada, salida, transferencia, ajuste), purchase order creation, and stock balance queries |
+| Invoices | `npm run test:invoices` | Invoice generation from approved quotes/jobs, tax application, PDF generation flags, status transitions, and voiding |
+| Warranties | `npm run test:warranties` | Warranty creation from closed jobs, approval workflow, intervention records, and warranty closure |
+| Website | `npm run test:website` | CMS content records, public product catalog entries, and UTM tracking metadata |
+| Wizard | `npm run test:wizard` | End-to-end wizard form submission, automatic lead creation in CRM, and email notification queue |
+| CRM | `npm run test:crm` | Lead scoring rules, pipeline stage transitions, opportunity creation, win/loss recording |
+| Marketing | `npm run test:marketing` | Campaign creation, contact list segmentation, send-queue population, and analytics event recording |
+| Dashboards | `npm run test:dashboards` | KPI view queries, aggregation correctness, and per-tenant data scoping on summary tables |
+| Costs | `npm run test:costos` | Job cost line entry, labor vs. material split, actual vs. budgeted variance calculations |
+| Profitability | `npm run test:rentabilidad` | Margin calculations per job, per client, and per period — validates computed columns and reporting views |
+| Documents | `npm run test:documentos` | Document uploads (DIAGNOSTIC, QUOTE, APPROVAL types), storage path recording, checksum storage, soft delete, and retrieval by entity |
+| Notifications | `npm run test:notificaciones` | Notification queue insertion, delivery status transitions, and per-user preference filtering |
+| Security & Audit | `npm run test:security-audit` | Audit log completeness, RLS policy enforcement across all core tables, and privilege escalation prevention |
+| Performance | `npm run test:hardening` | Query execution times on large datasets, index coverage for common filter patterns, and connection pooler behavior |
+| UAT | `npm run test:uat` | Full user acceptance test suite covering all modules in sequence with representative demo data |
+| Go-Live | `npm run test:go-live` | Production readiness checklist — verifies migrations, RLS, seed isolation, auth config, and performance thresholds |
+| Settings | `npm run test:settings` | Tenant-level configuration persistence, white-label settings CRUD, and configuration inheritance |
+| White Label | `npm run test:white-label` | Per-tenant branding record creation, CSS variable injection for primary/secondary colors, logo URL storage |
+| Integrations | `npm run test:integrations` | External provider connectivity checks (payment gateway sandbox, email provider, storage) |
+| Advanced Admin | `npm run test:advanced-admin` | Role creation, custom permission overrides per tenant, and super-admin privilege boundaries |
+
+## Running a Test
+
+Each script is invoked with a single npm command. For example, to run the clients test:
+
+```bash
+npm run test:clients
+# Executes: ts-node scripts/test-clients.ts
+```
+
+If `SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY` are present in `.env.local`, the script connects to the live database and runs full integration assertions. If credentials are absent, it falls back to static validation of the SQL migration file — confirming table definitions, trigger names, and RLS declarations are present.
+
+```bash
+# Example output (live database mode)
+--------------------------------------------------
+INICIANDO VALIDACIÓN SINTÁCTICA DEL MODELO CLIENTES Y SEDES...
+--------------------------------------------------
+✓ Tenants creados: A (uuid-a), B (uuid-b)
+✓ TC-CLI-01: Códigos autogenerados: CLI-000001, CLI-000002
+✓ TC-CLI-02: Código tras intento de alteración: CLI-000001
+✓ TC-CLI-03: Bloqueo de TAX_ID duplicado en mismo Tenant: Bloqueado Correctamente
+✓ TC-CLI-04: Mismo TAX_ID permitido en tenants cruzados.
+✓ TC-CON-01: Reemplazo automático de contacto principal.
+✓ TC-CON-02: Soft delete ejecutado.
+✓ TC-STE-01: Registro de sede comercial exitoso.
+✓ TC-EVT-01, 02: Eventos semánticos generados y auditados correctamente.
+
+[ÉXITO] Estructura sintáctica, triggers y modelo RLS validados correctamente.
+```
+
+## Recommended Test Execution Order
+
+Run scripts in the order below to respect cross-module dependencies. Each layer depends on data created by the one before it.
+
+1. **Foundation** — `npm run test:multitenant`  
+   Confirm RLS isolation is working before any other module can be trusted.
+
+2. **Core commerce pipeline** — `npm run test:clients` → `npm run test:requirements` → `npm run test:quotes` → `npm run test:approvals`  
+   Clients must exist before requirements; requirements before quotes; quotes before approvals.
+
+3. **Operations pipeline** — `npm run test:jobs` → `npm run test:inventory` → `npm run test:invoices`  
+   Jobs depend on approved quotes; inventory movements reference job records; invoices close the billing loop.
+
+4. **Lead generation** — `npm run test:wizard` → `npm run test:crm`  
+   The wizard creates leads that the CRM pipeline then processes.
+
+5. **Governance** — `npm run test:security-audit` → `npm run test:hardening`  
+   Run after all data-creating tests so the audit log and performance tests have realistic data to evaluate.
+
+6. **Sign-off** — `npm run test:uat` → `npm run test:go-live`  
+   UAT sweeps all modules end-to-end; go-live is the final production readiness gate.
+
+## Demo Users
+
+The seed migration creates **106 demo user accounts** distributed across both demo tenant companies, covering every role in the system:
+
+| Role | Count |
+|---|---|
+| Super Admin | 1 |
+| Admin Empresa | 2 |
+| Gerentes | 5 |
+| Directores | 5 |
+| Jefes | 10 |
+| Comerciales | 10 |
+| Ingenieros | 10 |
+| Técnicos | 15 |
+| Almacén | 5 |
+| Cartera | 5 |
+| Auditores | 3 |
+| Clientes (portal) | 25 |
+| Proveedores | 10 |
+| **Total** | **106** |
+
+All 106 demo accounts are created with `email_confirmed_at` already set — no email verification step is needed when signing in as a demo user during development testing.
+
+<Note>
+  Before running any test scripts, the seed migration must have provisioned the full demo dataset: 25 demo companies, 106 users, all roles, all site records, all permission assignments, the approvals structure, a functional client portal, and a payment gateway sandbox connection. See the pre-test checklist in `docs/10_pruebas/Antes de iniciar pruebas.txt` for the complete bootstrap requirement list.
+</Note>
+
+## Manual UAT Coverage
+
+The master test plan (`docs/10_pruebas/13 PLAN MAESTRO DE PRUEBAS OPERATIVAS.txt`) requires manual validation in addition to the automated scripts. Every UI surface must be verified by a human tester:
+
+- All buttons, icons, and links render and respond correctly
+- All filters, modals, and search inputs return accurate results
+- All exports (PDF, Excel) and imports produce valid files
+- All widgets, KPI cards, and reports display correct aggregated data
+
+The UAT dataset targets 25 demo companies (across Manufactura, Minería, HVAC, Data Center, and Logística sectors) with 250 contacts, 500 leads, 300 quotes, 200 jobs, 200 invoices, 300 inventory movements, and 100 warranties. A module is not considered passing until both the automated script and a manual tester sign off with screenshot evidence, result, user, date, and observations recorded.
+
+<Tip>
+  The `npm run test:go-live` script is the final production readiness gate. It runs a comprehensive checklist covering all modules, verifying migration completeness, RLS policy coverage, auth configuration, performance thresholds, and seed data isolation. A clean exit from this script is the recommended minimum bar before cutting a production release.
+</Tip>

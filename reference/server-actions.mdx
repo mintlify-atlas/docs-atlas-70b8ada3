@@ -1,0 +1,599 @@
+---
+title: "Server Actions Reference: All Available Next.js Server Functions"
+sidebarTitle: "Server Actions"
+description: "Complete reference for all Next.js Server Actions in B2B Import ERP. Each action is typed, tenant-scoped, and runs with service-role credentials on the server."
+---
+
+Next.js Server Actions (introduced in Next.js 14 and stabilised in 16) let you define async functions that run exclusively on the server and can be called directly from React components without building a separate API layer. In B2B Import ERP every Server Action is declared with the `"use server"` directive, resolves the caller's tenant via `getTenantId()`, and performs all database mutations through `supabaseAdmin` — the Supabase service-role client — so that Row-Level Security is never a bottleneck for trusted back-end operations.
+
+<Warning>
+  `supabaseAdmin` holds the **service-role key**, which bypasses all PostgreSQL RLS policies. Never import or expose this client in a Client Component (`"use client"`). It must only be used inside files that carry the `"use server"` directive or in Node.js-only server utilities.
+</Warning>
+
+## Common Pattern
+
+Every action follows the same three-step scaffold:
+
+1. **Resolve the tenant** — call `getTenantId(tenantCode)` to turn a human-readable slug (`"apex"`, `null` for the default tenant, etc.) into a stable UUID.
+2. **Execute the query** — use `supabaseAdmin` to read or write the resolved tenant's data.
+3. **Return typed data or throw** — on Supabase error, the action throws an `Error` whose message is safe to surface to the client.
+
+### `getTenantId` implementation
+
+```ts
+// src/app/actions.ts
+"use server";
+
+import { supabaseAdmin } from "@/utils/supabase";
+
+export async function getTenantId(tenantCode?: string | null): Promise<string> {
+  if (tenantCode === "apex") {
+    return "b0000000-0000-0000-0000-000000000000";
+  }
+  return "a0000000-0000-0000-0000-000000000000"; // default → AeroMax / acme
+}
+```
+
+<Note>
+  The current implementation uses deterministic UUID constants for the two demo tenants. In a production multi-tenant deployment, replace this with a database lookup against the `tenants` table using the `tenant_code` column.
+</Note>
+
+---
+
+## Clients & Contacts
+
+Actions live in `src/app/actions.ts`.
+
+### `getClients`
+
+Returns all active clients for a tenant, enriched with their total invoiced amount.
+
+```ts
+export async function getClients(
+  tenantCode?: string | null
+): Promise<ClientRow[]>
+```
+
+<ParamField path="tenantCode" type="string | null | undefined">
+  The tenant slug (e.g. `"apex"`). Pass `null` or omit to use the default tenant.
+</ParamField>
+
+**Returns** an array of objects shaped as:
+
+```ts
+{
+  id: string;
+  taxId: string;
+  name: string;         // legal_name
+  segment: string;      // industry
+  totalInvoiced: number; // sum of EMITIDA + PAGADA invoice amounts
+  status: "ACTIVO" | "SUSPENDIDO" | "PENDIENTE";
+}
+```
+
+Only records where `deleted_at IS NULL` are returned. Invoices are filtered to statuses `EMITIDA`, `PARCIALMENTE_PAGADA`, and `PAGADA`.
+
+---
+
+### `createClient`
+
+Creates a new client record for the tenant. Checks for a duplicate `tax_id` within the same tenant before inserting.
+
+```ts
+export async function createClient(
+  tenantCode: string | null,
+  clientData: {
+    taxId: string;
+    name: string;
+    segment: string;
+    email: string;
+  }
+): Promise<Client>
+```
+
+<ParamField path="tenantCode" type="string | null">
+  The tenant slug.
+</ParamField>
+
+<ParamField path="clientData.taxId" type="string" required>
+  RFC / NIT / tax identifier. Must be unique within the tenant.
+</ParamField>
+
+<ParamField path="clientData.name" type="string" required>
+  Legal name (`legal_name`).
+</ParamField>
+
+<ParamField path="clientData.segment" type="string" required>
+  Industry segment, stored in the `industry` column.
+</ParamField>
+
+<ParamField path="clientData.email" type="string" required>
+  Primary contact email.
+</ParamField>
+
+**Throws** `"Ya existe un cliente con este RFC para este tenant."` when the `tax_id` already exists.
+
+---
+
+## Leads
+
+Actions live in `src/app/actions/leads.ts`.
+
+### `calculateLeadScore`
+
+Pure scoring function — no database writes. Computes a 0–100 priority score and assigns a Spanish-language risk level.
+
+```ts
+export async function calculateLeadScore(
+  email: string,
+  role: string,
+  urgency: string
+): Promise<LeadScoreResult>
+```
+
+<ParamField path="email" type="string" required>
+  Contact email. Public domains (gmail, yahoo, etc.) incur a −20-point penalty. Disposable domains (yopmail, mailinator, tempmail) force `SPAM` classification.
+</ParamField>
+
+<ParamField path="role" type="string" required>
+  Professional role. Decision-maker roles (`"Director de Planta"`, `"Gerente de Mantenimiento"`, `"Supervisor de HVAC / Operaciones"`) add 40 points. Mid-level roles add 25 points.
+</ParamField>
+
+<ParamField path="urgency" type='"baja" | "media" | "alta"' required>
+  Urgency level. `alta` adds 40 points, `media` adds 20, `baja` adds 5.
+</ParamField>
+
+**Returns:**
+
+```ts
+interface LeadScoreResult {
+  score: number;                                       // 0–100
+  riskLevel: "CALIENTE" | "TIBIO" | "FRIO" | "SPAM"; // ≥70 CALIENTE, ≥40 TIBIO
+}
+```
+
+---
+
+### `createLeadWithScore`
+
+Scores the lead and persists it to the `leads` table with `status = "NUEVO"`.
+
+```ts
+export async function createLeadWithScore(
+  tenantCode: string | null,
+  leadData: {
+    clientId: string;
+    contactId: string;
+    notes?: string;
+    role: string;
+    urgency: string;
+    email: string;
+  }
+): Promise<Lead>
+```
+
+<ParamField path="tenantCode" type="string | null" required>
+  Tenant slug.
+</ParamField>
+
+<ParamField path="leadData.clientId" type="string" required>
+  UUID of the existing `clients` record.
+</ParamField>
+
+<ParamField path="leadData.contactId" type="string" required>
+  UUID of the existing `client_contacts` record.
+</ParamField>
+
+<ParamField path="leadData.role" type="string" required>
+  Contact's professional role — fed to `calculateLeadScore`.
+</ParamField>
+
+<ParamField path="leadData.urgency" type="string" required>
+  Urgency level — fed to `calculateLeadScore`.
+</ParamField>
+
+<ParamField path="leadData.email" type="string" required>
+  Contact email — fed to `calculateLeadScore`.
+</ParamField>
+
+---
+
+## Requirements
+
+Actions live in `src/app/actions/requirements.ts`.
+
+### `getRequirements`
+
+Returns all requirements for the tenant, ordered newest-first, with the linked client's `legal_name` and `city` joined.
+
+```ts
+export async function getRequirements(
+  tenantCode?: string | null
+): Promise<RequirementRow[]>
+```
+
+<ParamField path="tenantCode" type="string | null | undefined">
+  Tenant slug.
+</ParamField>
+
+**Returns** `RequirementRow[]` where each row includes:
+
+```ts
+interface RequirementRow {
+  id: string;
+  requirement_code: string;
+  title: string;
+  category: string;
+  priority: "LOW" | "MEDIUM" | "HIGH";
+  status: "BORRADOR" | "NUEVO" | "EN_REVISION" | "DIAGNOSTICO" | "COTIZACION" | "COMPLETADO" | "CANCELADO";
+  client_id: string;
+  engineering_user_id: string | null;
+  sales_user_id: string | null;
+  created_at: string;
+  client: { legal_name: string; city: string | null } | null;
+}
+```
+
+---
+
+### `createRequirement`
+
+Inserts a new requirement in `BORRADOR` status.
+
+```ts
+export async function createRequirement(
+  tenantCode: string | null,
+  reqData: {
+    title: string;
+    clientId: string;
+    category: string;
+    priority: string;
+  }
+): Promise<Requirement>
+```
+
+<ParamField path="reqData.title" type="string" required>
+  Short descriptive title.
+</ParamField>
+
+<ParamField path="reqData.clientId" type="string" required>
+  UUID of the parent client.
+</ParamField>
+
+<ParamField path="reqData.category" type="string" required>
+  Service category (e.g. `"fabricacion"`, `"mantenimiento"`).
+</ParamField>
+
+<ParamField path="reqData.priority" type="string" required>
+  Priority level: `"LOW"`, `"MEDIUM"`, or `"HIGH"`.
+</ParamField>
+
+---
+
+## Quotes
+
+Actions live in `src/app/actions/quotes.ts`.
+
+### `getQuotes`
+
+Returns all quotes for the tenant, newest-first, with the linked client's `legal_name` joined.
+
+```ts
+export async function getQuotes(
+  tenantCode?: string | null
+): Promise<QuoteRow[]>
+```
+
+<ParamField path="tenantCode" type="string | null | undefined">
+  Tenant slug.
+</ParamField>
+
+**Returns** `QuoteRow[]`:
+
+```ts
+interface QuoteRow {
+  id: string;
+  quote_code: string;
+  client_id: string;
+  requirement_id: string | null;
+  assigned_user_id: string | null;
+  valid_until: string;
+  subtotal: number;
+  total_amount: number;
+  status: "BORRADOR" | "EN_REVISION" | "ENVIADA" | "APROBADA" | "RECHAZADA" | "VENCIDA";
+  created_at: string;
+  client: { legal_name: string } | null;
+}
+```
+
+---
+
+### `createQuote`
+
+Creates a new quote header in `BORRADOR` status.
+
+```ts
+export async function createQuote(
+  tenantCode: string | null,
+  quoteData: {
+    clientId: string;
+    requirementId?: string;
+    validUntil: string;
+  }
+): Promise<Quote>
+```
+
+<ParamField path="quoteData.clientId" type="string" required>
+  UUID of the client.
+</ParamField>
+
+<ParamField path="quoteData.requirementId" type="string">
+  Optional UUID of a linked requirement.
+</ParamField>
+
+<ParamField path="quoteData.validUntil" type="string" required>
+  ISO date string for the quote expiry date (`YYYY-MM-DD`).
+</ParamField>
+
+---
+
+### `getQuoteItems`
+
+Returns all line items for a specific quote, ordered by `item_order`.
+
+```ts
+export async function getQuoteItems(
+  quoteId: string
+): Promise<QuoteItem[]>
+```
+
+<ParamField path="quoteId" type="string" required>
+  UUID of the parent quote.
+</ParamField>
+
+---
+
+## Wizard
+
+Actions live in `src/app/actions/wizard.ts`.
+
+### `submitWizardData`
+
+The wizard is the main public-facing intake form. This single action orchestrates the entire lead-capture pipeline: engineering calculations → client upsert → contact upsert → lead scoring → diagnostic report creation.
+
+```ts
+export async function submitWizardData(
+  tenantCode: string | null,
+  data: WizardSubmission
+): Promise<WizardResult>
+```
+
+<ParamField path="tenantCode" type="string | null" required>
+  Tenant slug for the landing page the visitor came from.
+</ParamField>
+
+<ParamField path="data" type="WizardSubmission" required>
+  Full submission from the multi-step wizard form:
+  ```ts
+  interface WizardSubmission {
+    servicio: "fabricacion" | "venta" | "mantenimiento" | "reparacion" | "otro";
+    length: number;   // room length in metres
+    width: number;    // room width in metres
+    height: number;   // room height in metres
+    environment: "heavy_plant" | "data_center" | "mining" | "warehouse" | "default";
+    nombre: string;
+    empresa: string;
+    cargo: string;
+    telefono: string;
+    email: string;
+    ciudad: string;
+    urgencia: "baja" | "media" | "alta";
+    otroDetalle?: string;
+  }
+  ```
+</ParamField>
+
+**Processing steps (in order):**
+
+1. `calculateRequiredCfm()` computes airflow from room dimensions + environment.
+2. `estimatePrice()` produces a COP/USD price range.
+3. Client is **upserted** by `legal_name` — existing clients are reused, not duplicated.
+4. Contact is **upserted** by `email` within the client — reused if already present.
+5. `createLeadWithScore()` scores the lead and persists it.
+6. A `diagnostic_reports` record is created, linking all calculated data to the lead.
+
+**Returns** `WizardResult`:
+
+```ts
+interface WizardResult {
+  diagnosticCode: string;
+  requiredCfm: number;
+  cfmCategory: "CRITICAL" | "HIGH" | "STANDARD" | "COMPACT";
+  calculatedVolumeM3: number;
+  estimatedPriceMinCop: number;
+  estimatedPriceMaxCop: number;
+  estimatedPriceMinUsd: number;
+  estimatedPriceMaxUsd: number;
+  materialsRecommendation: string;
+  leadId: string;
+}
+```
+
+---
+
+## Payments
+
+Actions live in `src/app/actions/payments.ts`.
+
+### `getPaymentGateway`
+
+Fetches the active Wompi gateway configuration for the tenant.
+
+```ts
+export async function getPaymentGateway(
+  tenantCode?: string | null
+): Promise<PaymentGateway | null>
+```
+
+Returns `null` (never throws) when no active gateway is configured, so callers should guard for the `null` case before attempting checkout.
+
+---
+
+### `createWompiCheckout`
+
+Creates a `payment_transactions` record, stamps the invoice with a payment link, and returns the checkout URL.
+
+```ts
+export async function createWompiCheckout(
+  tenantCode: string | null,
+  invoiceId: string,
+  amount: number,
+  customerEmail: string,
+  customerName: string
+): Promise<WompiCheckout>
+```
+
+<ParamField path="invoiceId" type="string" required>
+  UUID of the invoice being paid.
+</ParamField>
+
+<ParamField path="amount" type="number" required>
+  Amount in COP (Colombian Peso).
+</ParamField>
+
+<ParamField path="customerEmail" type="string" required>
+  Payer email — stored on the transaction record.
+</ParamField>
+
+<ParamField path="customerName" type="string" required>
+  Payer display name.
+</ParamField>
+
+**Returns:**
+
+```ts
+{
+  transactionId: string;
+  reference: string;       // unique reference: "INV-{invoiceId[0..8]}-{timestamp}"
+  checkoutUrl: string;     // Wompi hosted checkout URL
+  publicKey: string;
+  environment: string;     // "sandbox" | "production"
+  amount: number;
+  currency: "COP";
+}
+```
+
+**Throws** `"Pasarela de pagos no configurada para este tenant."` when no active gateway exists.
+
+---
+
+### `processWompiWebhook`
+
+Called by `POST /api/webhooks/wompi`. Finds the matching transaction by `reference_id`, maps the Wompi status, and — when `APPROVED` — creates a `payments` record, updates the invoice balance, and creates a `payment_reconciliations` entry.
+
+```ts
+export async function processWompiWebhook(
+  payload: {
+    event: string;
+    data: {
+      id: string;
+      reference_id?: string;
+      status: string;
+      amount_in_cents: number;
+      currency: string;
+      customer_email?: string;
+      payment_method_type?: string;
+    };
+  }
+): Promise<{ success: boolean; status: string }>
+```
+
+After processing, the action calls `revalidatePath("/portal")` and `revalidatePath("/dashboard/invoices")` to invalidate Next.js caches.
+
+---
+
+## Catalog
+
+Actions live in `src/app/actions/catalog.ts`.
+
+### `getIndustrialCatalog`
+
+Fetches the full five-level product hierarchy for the tenant: Category → Subcategory → Family → Series → Products. Each product includes specifications, images, documents, CAD files, and SEO metadata.
+
+```ts
+export async function getIndustrialCatalog(
+  tenantCode?: string | null
+): Promise<CatalogCategory[]>
+```
+
+<ParamField path="tenantCode" type="string | null | undefined">
+  Tenant slug.
+</ParamField>
+
+**Returns** a nested `CatalogCategory[]` tree:
+
+```ts
+interface CatalogCategory {
+  id: string;
+  categoryCode: string;
+  name: string;
+  description: string;
+  subcategories: CatalogSubcategory[];  // → families → series → products
+}
+```
+
+<Note>
+  This function issues sequential waterfall queries for each level of the hierarchy. For large catalogs consider caching the result with `unstable_cache` or implementing a single recursive SQL view.
+</Note>
+
+---
+
+### `getProductDetail`
+
+Fetches the full detail for a single product including specifications, images, documents, CAD files, and SEO metadata.
+
+```ts
+// Resolved inside getIndustrialCatalog per-product; use the catalog traversal
+// to retrieve individual ProductDetail objects.
+interface ProductDetail {
+  id: string;
+  productCode: string;
+  name: string;
+  description: string;
+  status: string;
+  specifications: Record<string, string>;
+  images: ProductMedia[];
+  documents: ProductMedia[];
+  cadFiles: ProductMedia[];
+  seo?: {
+    metaTitle: string;
+    metaDescription: string;
+    metaKeywords: string;
+    slug: string;
+  };
+}
+```
+
+---
+
+## Branding
+
+Actions live in `src/app/actions/branding.ts`.
+
+### `getTenantBranding`
+
+Returns the merged branding configuration: hardcoded defaults from `getBrandingDefaults()` are overridden by any keys stored in `tenant_settings` for modules `EMPRESA`, `LOCALIZACION`, `IDENTIDAD`, and `DOCUMENTOS`.
+
+```ts
+export async function getTenantBranding(
+  tenantCode?: string | null
+): Promise<BrandingConfig>
+```
+
+<ParamField path="tenantCode" type="string | null | undefined">
+  Tenant slug. Affects which defaults are applied (`"apex"` vs AeroMax).
+</ParamField>
+
+**Returns** the full `BrandingConfig` object (50+ keys covering company info, logos, colours, typography, localization, email/PDF templates, and portal labels). See `src/utils/branding-defaults.ts` for the complete interface.
+
+---

@@ -1,0 +1,201 @@
+---
+title: "Row-Level Security Policies: Tenant Isolation Patterns"
+sidebarTitle: "RLS Policies"
+description: "All operational tables use PostgreSQL RLS to enforce tenant isolation. Learn the policy patterns, SUPER_ADMIN bypass logic, and how JWT claims are used for authorization."
+---
+
+Row-Level Security (RLS) is PostgreSQL's mechanism for attaching authorization logic directly to tables. When a query runs, the database engine automatically appends the active policy's `USING` clause as a `WHERE` predicate, making it impossible — at the database layer — for a user to read or write rows outside their permitted scope. In B2B Import ERP, RLS is the last line of tenant isolation defence after application-level checks.
+
+<Warning>
+  The `supabaseAdmin` service-role client used by all Server Actions **bypasses all RLS policies**. This is intentional — Server Actions run on trusted server infrastructure and need to perform cross-tenant operations (e.g., the wizard creates clients before a session exists). Never expose the service-role key to the browser or bundle it into client-side code.
+</Warning>
+
+---
+
+## How RLS Works with Supabase
+
+When a user authenticates, Supabase issues a signed JWT containing the user's `auth.uid()` (the UUID from `auth.users`). Every database query made by the `supabase` anon/user client sends this JWT in the `Authorization` header. PostgreSQL extracts it via the `auth.uid()` built-in function, making it available to policy expressions.
+
+The `users` table joins `auth.uid()` to the operational `tenant_id` and `is_platform_user` flag:
+
+```sql
+-- Resolve the operational tenant_id for any authenticated user
+SELECT tenant_id FROM users WHERE auth_user_id = auth.uid();
+
+-- Check for platform super-admin
+SELECT is_platform_user FROM users WHERE auth_user_id = auth.uid();
+```
+
+These subqueries appear inside every RLS policy and are automatically inlined by the query planner.
+
+---
+
+## Standard Tenant Isolation Policy
+
+Every operational table uses a variant of this template:
+
+```sql
+CREATE POLICY tenant_isolation_policy ON clients
+  FOR ALL
+  USING (
+    -- Rule 1: SUPER_ADMIN bypass (is_platform_user = true means tenant_id IS NULL)
+    (SELECT is_platform_user FROM users WHERE auth_user_id = auth.uid()) = true
+    OR
+    -- Rule 2: Strict per-tenant isolation
+    tenant_id = (SELECT tenant_id FROM users WHERE auth_user_id = auth.uid())
+  );
+```
+
+This policy covers `SELECT`, `INSERT`, `UPDATE`, and `DELETE` with a single `FOR ALL` clause. Tables that need more granular control define separate per-operation policies.
+
+---
+
+## SUPER_ADMIN Bypass
+
+Users whose `users.is_platform_user = true` pass the first condition of every isolation policy and therefore see **all** tenants' data. This flag is set only for platform-level administrators who manage the multi-tenant infrastructure — it is never granted to individual tenant users.
+
+From `docs/04_arquitectura/SECURITY_MODEL.md`:
+
+> Para cumplir con el requerimiento de que el SUPER_ADMIN no pertenezca a ninguna empresa y administre la plataforma de manera global, `tenant_id → NULL` e `is_platform_user → true`.
+
+The database helper function `is_platform_super_admin()` encapsulates this check for reuse across policies:
+
+```sql
+-- Used in user_access_logs and other audit tables
+CREATE POLICY super_admin_bypass ON user_access_logs
+  FOR ALL TO authenticated
+  USING (is_platform_super_admin())
+  WITH CHECK (is_platform_super_admin());
+```
+
+---
+
+## Read-Only Policies: AUDITOR Role
+
+The `AUDITOR` role is granted `SELECT` on operational and audit tables but cannot `INSERT`, `UPDATE`, or `DELETE`. This is enforced by defining separate operation-scoped policies:
+
+```sql
+-- AUDITOR and GERENTE can read access logs within their tenant
+CREATE POLICY user_access_logs_tenant_auditor ON user_access_logs
+  FOR SELECT TO authenticated
+  USING (
+    tenant_id = (SELECT tenant_id FROM users WHERE auth_user_id = auth.uid() LIMIT 1)
+    AND EXISTS (
+      SELECT 1 FROM user_roles ur
+      JOIN roles r ON ur.role_id = r.id
+      WHERE ur.user_id = (SELECT id FROM users WHERE auth_user_id = auth.uid() LIMIT 1)
+        AND r.role_code IN ('AUDITOR', 'GERENTE')
+    )
+  );
+```
+
+The `FOR SELECT` scope means this policy never allows writes — the absence of a write policy for the `AUDITOR` role implicitly denies mutations.
+
+---
+
+## Client Portal Policies
+
+The `CLIENTE` role is used for the self-service client portal. Portal users are linked to a specific `client_id` through their `users` record (or through a separate `portal_users` join). Their policies restrict access to rows where `client_id` matches their own:
+
+```sql
+-- Example: client can only see their own invoices
+CREATE POLICY portal_client_invoices ON invoices
+  FOR SELECT TO authenticated
+  USING (
+    client_id = (
+      SELECT client_id FROM portal_users
+      WHERE auth_user_id = auth.uid()
+      LIMIT 1
+    )
+  );
+```
+
+Portal users have no `INSERT` or `DELETE` policies on invoices or quotes — they are read-only consumers of the ERP data.
+
+---
+
+## User Self-Service Policies
+
+Regular authenticated users can read their own access log entries regardless of role:
+
+```sql
+CREATE POLICY user_access_logs_own_records ON user_access_logs
+  FOR SELECT TO authenticated
+  USING (
+    user_id = (SELECT id FROM users WHERE auth_user_id = auth.uid() LIMIT 1)
+  );
+```
+
+For INSERT (e.g., logging their own login event):
+
+```sql
+CREATE POLICY user_access_logs_insert_authenticated ON user_access_logs
+  FOR INSERT TO authenticated
+  WITH CHECK (
+    tenant_id = (SELECT tenant_id FROM users WHERE auth_user_id = auth.uid() LIMIT 1)
+    AND user_id = (SELECT id FROM users WHERE auth_user_id = auth.uid() LIMIT 1)
+  );
+```
+
+---
+
+## `audit_log` Policy
+
+`audit_log` is driven entirely by server-side triggers — the application never calls `INSERT` on it directly. RLS permits:
+
+- **SELECT**: Only `ADMIN` and `AUDITOR` roles within the same tenant (plus `SUPER_ADMIN`).
+- **INSERT**: Allowed for authenticated users (the trigger fires as the authenticated session's user context).
+- **UPDATE / DELETE**: No policies exist — effectively denied for all authenticated roles.
+
+```sql
+-- Only admins and auditors can read the audit trail
+CREATE POLICY audit_log_read ON audit_log
+  FOR SELECT TO authenticated
+  USING (
+    (SELECT is_platform_user FROM users WHERE auth_user_id = auth.uid()) = true
+    OR (
+      tenant_id = (SELECT tenant_id FROM users WHERE auth_user_id = auth.uid())
+      AND current_user_has_role('ADMIN') OR current_user_has_role('AUDITOR')
+    )
+  );
+```
+
+---
+
+## Service Role Bypass
+
+`supabaseAdmin` is constructed with the `SUPABASE_SERVICE_ROLE_KEY` environment variable. The Supabase gateway recognises service-role tokens and instructs PostgreSQL to execute queries as a superuser, bypassing all RLS policies entirely.
+
+Intentional uses of the service role in this project:
+
+| Use Case | Why Service Role is Needed |
+|---|---|
+| Wizard form submission | Visitor is unauthenticated — no JWT, no tenant session. |
+| Server Actions (all) | Trusted server code; avoids per-user policy overhead. |
+| Admin operations (tenant creation, seeding) | Require cross-tenant writes. |
+
+<Warning>
+  The `SUPABASE_SERVICE_ROLE_KEY` must only ever appear in server-side environment variables (`.env.local`, Vercel environment variables without the `NEXT_PUBLIC_` prefix). If it is accidentally bundled into client JavaScript it grants any browser user full database access without any RLS enforcement.
+</Warning>
+
+---
+
+## Security Testing
+
+Run the built-in security audit script to verify that RLS policies are active on all expected tables and that no policy gaps exist:
+
+```bash
+npm run test:security-audit
+```
+
+This script connects to the Supabase project and asserts that `rowsecurity = true` for every table listed in the security model and that no table has zero policies defined.
+
+<Tip>
+  You can also inspect RLS status directly in the Supabase dashboard under **Table Editor → [table] → RLS** or via the SQL Editor:
+  ```sql
+  SELECT tablename, rowsecurity
+  FROM pg_tables
+  WHERE schemaname = 'public'
+  ORDER BY tablename;
+  ```
+</Tip>

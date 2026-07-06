@@ -1,0 +1,167 @@
+---
+title: "Jobs Module: Field Service Work Orders and Activity Tracking"
+sidebarTitle: "Jobs"
+description: "The Jobs module manages field service work orders from scheduling through execution. Technicians log activities, time, materials used, and close orders with sign-off."
+---
+
+The Jobs module is the operational heart of B2B Import ERP. Every billable or warranty-covered service engagement lives here as a **work order** — a structured record that captures planning dates, the assigned technician, activities performed in the field, materials consumed, and the digital sign-off documents required for closure. Jobs are always traceable to the requirement that originated them and, optionally, to the approved quote that priced the work.
+
+---
+
+## Job Lifecycle
+
+A job follows a strict, audit-enforced state machine. No status can be changed directly in the database — all transitions must pass through domain services that validate permissions, write to the audit log, and fire business events.
+
+```
+PENDIENTE → PROGRAMADO → EN_EJECUCION → FINALIZADO → ENTREGADO → CERRADO
+                                ↕
+                           SUSPENDIDO
+                                ↓
+                           CANCELADO  (reachable from PENDIENTE or PROGRAMADO)
+```
+
+| Status | Meaning |
+|---|---|
+| `PENDIENTE` | Job created, awaiting scheduling |
+| `PROGRAMADO` | Technician and date assigned; `assigned_user_id` and `planned_start_date` are required |
+| `EN_EJECUCION` | Work has started; `actual_start_date` is required to enter this state |
+| `SUSPENDIDO` | Temporarily paused; can resume to `EN_EJECUCION` |
+| `FINALIZADO` | All non-cancelled activities are `COMPLETADA`; system sets `actual_end_date` automatically |
+| `ENTREGADO` | A `DELIVERY_NOTE` document in `PUBLICADO` status must be attached before this transition |
+| `CERRADO` | Final state — fully immutable; triggers automatic warranty generation |
+| `CANCELADO` | Reachable from `PENDIENTE` or `PROGRAMADO`; requires `cancel_reason` ≥ 10 characters |
+
+<Note>
+  When a job reaches `CERRADO`, a 12-month warranty record is automatically created via the `generate_warranty_on_job_close` database trigger. See the [Warranties module](/modules/warranties) for details.
+</Note>
+
+---
+
+## Job Creation Flow
+
+Jobs are never created manually in isolation — they are generated automatically by a database trigger (`trg_create_job_on_ot`) when a **requirement** transitions to the `OT_GENERADA` status. The trigger:
+
+1. Looks up the approved quote linked to the requirement.
+2. Resolves the `site_id` and `area_id` from the assigned engineering user.
+3. Inserts a new `jobs` row in `PENDIENTE` status, copying `client_id`, `title`, `description`, `priority`, and `assigned_user_id` from the requirement.
+4. Writes a `JOB_CREATED` business event for downstream notifications.
+
+The `requirement_id` foreign key on every job provides a permanent back-link to the originating requirement, and `quote_id` links to the approved commercial proposal.
+
+<Tip>
+  Manual job creation is restricted to users with the `GERENTE`, `GERENTE_GENERAL`, `JEFE_PROYECTOS`, or `COORDINADOR_OPERACIONES` roles. Attempting to insert a job directly without those roles raises a database-level permission exception.
+</Tip>
+
+---
+
+## Key Fields
+
+The `jobs` table (migration `20260617000006_jobs_core.sql`) defines the following primary fields:
+
+| Field | Type | Description |
+|---|---|---|
+| `job_code` | `varchar(50)` | Auto-generated code in format `JOB-000001`; unique per tenant |
+| `tenant_id` | `uuid` | Multi-tenant isolation key; enforced by RLS |
+| `client_id` | `uuid` | FK → `clients`; the customer receiving the service |
+| `requirement_id` | `uuid` | FK → `requirements`; the originating request |
+| `quote_id` | `uuid` | FK → `quotes`; nullable, set when an approved quote exists |
+| `assigned_user_id` | `uuid` | FK → `users`; the lead technician |
+| `site_id` / `area_id` | `uuid` | Physical location of the work |
+| `planned_start_date` | `timestamp` | Scheduled start; required for `PROGRAMADO` |
+| `planned_end_date` | `timestamp` | Scheduled end |
+| `actual_start_date` | `timestamp` | Set when entering `EN_EJECUCION` |
+| `actual_end_date` | `timestamp` | Set automatically when all activities complete |
+| `estimated_hours` | `numeric(10,2)` | Planned effort |
+| `actual_hours` | `numeric(10,2)` | Actual recorded effort |
+| `priority` | `enum` | `LOW`, `MEDIUM`, `HIGH`, or `CRITICAL` |
+| `status` | `varchar(50)` | Current lifecycle state (see above) |
+| `cancel_reason` | `text` | Mandatory when cancelling; minimum 10 characters |
+
+---
+
+## Activities
+
+Each job contains one or more **child activity records** in the `job_activities` table. Activities follow their own parallel state machine (`PENDIENTE → PROGRAMADA → EN_EJECUCION → COMPLETADA`, with `SUSPENDIDA` and `CANCELADA` as side-states) and drive the parent job's state through automatic propagation triggers:
+
+- When any activity moves to `EN_EJECUCION`, the parent job automatically advances from `PENDIENTE` or `PROGRAMADO` to `EN_EJECUCION`.
+- When **all** non-cancelled activities reach `COMPLETADA`, the parent job automatically advances to `FINALIZADO` and `actual_end_date` is stamped.
+- When a job is `CANCELADO`, all open activities are automatically set to `CANCELADA`.
+
+Activity codes are auto-generated as `{job_code}-01`, `{job_code}-02`, etc. Key activity fields:
+
+| Field | Description |
+|---|---|
+| `activity_code` | Auto-generated from parent job code + sequence suffix |
+| `title` | Short description of the task |
+| `assigned_user_id` | Technician responsible for this activity |
+| `planned_start_date` / `planned_end_date` | Must fall within the parent job's planned date range |
+| `actual_start_date` / `actual_end_date` | Stamped during execution |
+| `estimated_hours` / `actual_hours` | Time tracking fields |
+| `status` | Current activity state |
+
+<Note>
+  Planned dates for activities are validated by the `validate_activity_dates` trigger — an activity cannot be scheduled outside its parent job's date range. Changing the job's planned dates also validates that no existing activities would fall outside the new range.
+</Note>
+
+---
+
+## Materials Consumed
+
+When technicians use parts or equipment on site, those are recorded as `inventory_movements` with `movement_type = 'Salida'`. Every outbound movement **requires** a `job_id` (enforced at the database level by `chk_movement_job_required`). When the movement is applied, the system automatically:
+
+- Deducts stock from the relevant warehouse.
+- Stamps the average cost to the movement.
+- Fires a `JOB_MATERIAL_CONSUMED` business event with quantity and cost details.
+- Generates a corresponding `costs` record against the job for budget tracking.
+
+See the [Inventory module](/modules/inventory) for the full movement lifecycle.
+
+---
+
+## Attached Documents
+
+Jobs support structured document attachments through the Documents module. The `documents` table links to a job via `entity_type = 'JOB'` and `entity_id = <job_id>`. Supported document types include:
+
+<CardGroup cols={2}>
+  <Card title="Orden de Trabajo" icon="file-lines">
+    The formal work order issued at the start of the job.
+  </Card>
+  <Card title="Plano / Memoria Técnica" icon="drafting-compass">
+    Engineering drawings and technical specifications.
+  </Card>
+  <Card title="Fotografías" icon="camera">
+    Photo evidence captured during field execution.
+  </Card>
+  <Card title="Acta de Entrega" icon="file-signature">
+    Client sign-off document required before transitioning to `ENTREGADO`. Must be in `PUBLICADO` status.
+  </Card>
+</CardGroup>
+
+<Warning>
+  The job **cannot** advance to `ENTREGADO` unless a document with `document_type = 'DELIVERY_NOTE'` and `status = 'PUBLICADO'` exists for that job. This check is enforced at the database trigger level and cannot be bypassed by the application layer.
+</Warning>
+
+---
+
+## RBAC Permissions
+
+| Permission | Roles |
+|---|---|
+| `jobs.create` (manual) | `GERENTE`, `GERENTE_GENERAL`, `JEFE_PROYECTOS`, `COORDINADOR_OPERACIONES` |
+| `jobs.manage` (edit, reschedule) | All above + `ALMACENISTA` for material recording |
+| `jobs.view` | All internal roles; `AUDITOR` can view soft-deleted records |
+| `jobs.close` | `GERENTE`, `GERENTE_GENERAL` |
+
+Row Level Security on `jobs` and `job_activities` ensures all reads and writes are scoped to the authenticated user's `tenant_id`.
+
+---
+
+## Dashboard URL
+
+Access the jobs board at:
+
+```
+/dashboard/jobs?tenant=<code>
+```
+
+Replace `<code>` with your tenant's URL code (e.g., `apex` or `demo`).

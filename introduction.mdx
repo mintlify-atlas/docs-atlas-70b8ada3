@@ -1,0 +1,65 @@
+---
+title: "B2B Import ERP: Industrial Multi-Tenant ERP Platform"
+sidebarTitle: "Introduction"
+description: "B2B Import ERP is a modular multi-tenant ERP for industrial B2B companies, covering the full lifecycle from lead capture to invoicing with RLS-based tenant isolation."
+---
+
+B2B Import ERP is a production-grade, modular enterprise resource planning platform built for industrial B2B companies. It covers the complete commercial and operational lifecycle — from initial lead capture and technical pre-engineering wizards, through quoting, approvals, and job execution, all the way to invoicing, payment tracking, and post-sale warranties. The platform is architected as a true multi-tenant SaaS: every record is scoped to a `tenant_id` enforced at the PostgreSQL Row Level Security (RLS) layer, making it suitable for agencies, resellers, or ISVs who need to serve multiple independent clients from a single deployment.
+
+## What B2B Import ERP Covers
+
+The platform is organized around three major areas of business operations:
+
+- **Multi-Tenant SaaS Core** — Tenant provisioning, white-label branding, user and role management (RBAC), site and area structures, and a full audit trail on every critical state change.
+- **Commercial Lifecycle** — CRM leads, client profiles, technical requirements, itemized quotes with multi-level approval workflows, and a public-facing interactive pre-engineering wizard for prospect qualification.
+- **Operations & Finance** — Work order (job) management, inventory stock control with warehouse movements, electronic invoicing, payment reconciliation, and warranty claim tracking.
+
+Every tenant receives its own isolated data partition and can configure its own brand colors, logo, and domain through the white-label settings panel — no code change required.
+
+## Technology Choices
+
+B2B Import ERP is built on a deliberately minimal, high-leverage stack chosen for long-term maintainability in enterprise contexts.
+
+| Concern | Technology |
+|---|---|
+| Framework | Next.js 16 (App Router, React 19) |
+| Database | PostgreSQL via Supabase |
+| Tenant isolation | Row Level Security (RLS) policies |
+| Auth | Supabase Auth (GoTrue / JWT) |
+| UI Components | Radix UI (headless primitives) |
+| Styling | Tailwind CSS v4 |
+| Animations | Framer Motion (transitions < 200 ms) |
+| Forms | React Hook Form + Zod |
+| Charts | Recharts |
+| PDF Export | jsPDF (dynamic import, client-side) |
+| Excel Export | XLSX |
+
+## Architecture Pillars
+
+The codebase is governed by four non-negotiable architectural rules that apply across every module:
+
+1. **No direct database access from the UI.** All data mutations flow through Next.js Server Actions. UI components never import or call Supabase directly for business operations.
+2. **Domain layer owns all business rules.** Validation, state transitions, approval logic, and audit recording are centralised in Server Actions and utility modules — never scattered across React components.
+3. **Tenant isolation at the RLS layer.** Application-level `tenant_id` filtering is supplementary; the RLS policies in PostgreSQL are the security boundary. A compromised application query cannot leak cross-tenant data.
+4. **Every action is audited.** Create, update, soft-delete, status change, approval, and rejection events are recorded to the `audit_log` table with actor, timestamp, and previous/next state.
+
+## Explore the Documentation
+
+<CardGroup cols={2}>
+  <Card title="Quickstart" icon="rocket" href="/quickstart">
+    Clone the repo, configure environment variables, run migrations, and access your first tenant dashboard in under 10 minutes.
+  </Card>
+  <Card title="Architecture" icon="layer-group" href="/architecture">
+    Deep-dive into the layered module design, directory structure, and the rules that keep the codebase maintainable at scale.
+  </Card>
+  <Card title="Multi-Tenancy" icon="building" href="/concepts/multi-tenancy">
+    Understand how tenant isolation works through PostgreSQL RLS policies and the `tenant_id` contract.
+  </Card>
+  <Card title="RBAC & Permissions" icon="shield-halved" href="/concepts/rbac">
+    Learn how roles, permissions, and per-user exceptions are modelled and enforced across all modules.
+  </Card>
+</CardGroup>
+
+<Note>
+  The reference implementation ships with two pre-configured demo tenants in the **ventilation and industrial engineering sector** — AeroMax Industrial (`acme`) and Apex Logística B2B (`apex`). All seed data, product catalogs, and test scripts target this vertical. When deploying for a different industry, tenant settings, catalog data, and the pre-engineering wizard decision trees are fully configurable from the admin panel without touching source code.
+</Note>

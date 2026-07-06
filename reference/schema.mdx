@@ -1,0 +1,395 @@
+---
+title: "Database Schema: Tables, Columns, and Relationships"
+sidebarTitle: "Schema"
+description: "Complete schema reference for B2B Import ERP. All tables include tenant_id for RLS isolation, audit timestamps, and soft-delete via deleted_at."
+---
+
+The B2B Import ERP database is a multi-tenant PostgreSQL schema hosted on Supabase. Every design decision is driven by three principles: **hard tenant isolation** (all operational rows carry `tenant_id`), **full auditability** (every mutation is tracked by triggers writing to `audit_log`), and **reversibility** (rows are never physically deleted — `deleted_at` timestamps mark records as inactive). The schema is built up by 30+ ordered SQL migrations under `supabase/migrations/`.
+
+---
+
+## Global Conventions
+
+Every operational table (exceptions noted below) shares these columns:
+
+| Column | Type | Default | Description |
+|---|---|---|---|
+| `id` | `UUID` | `gen_random_uuid()` | Immutable primary key. |
+| `tenant_id` | `UUID NOT NULL` | — | Foreign key → `tenants(id)`. RLS is enforced on this column. |
+| `created_at` | `TIMESTAMPTZ` | `NOW()` | Insert timestamp. |
+| `updated_at` | `TIMESTAMPTZ` | `NOW()` | Auto-updated by a `BEFORE UPDATE` trigger. |
+| `deleted_at` | `TIMESTAMPTZ` | `NULL` | Soft-delete marker. `NULL` = active record. |
+| `created_by` | `UUID` | — | FK → `users(id)`. Set by the Server Action that created the row. |
+
+All queries issued by Server Actions filter `.is("deleted_at", null)` to exclude soft-deleted rows automatically.
+
+<Note>
+  The `audit_log` and `user_access_logs` tables are append-only. Records are never updated or deleted — even soft-deletes are blocked by a trigger that raises an exception on `DELETE`. This preserves an unbroken forensic record of all changes.
+</Note>
+
+---
+
+## Core Tables
+
+### `tenants`
+
+The root entity. One row per company that licenses the platform.
+
+| Column | Type | Notes |
+|---|---|---|
+| `id` | `UUID PK` | |
+| `tenant_code` | `VARCHAR(50) UNIQUE` | Human-readable slug used in URLs and Server Action calls (e.g. `"apex"`). |
+| `name` | `VARCHAR(200)` | Short display name. |
+| `legal_name` | `VARCHAR(250)` | Full legal entity name. |
+| `tax_id` | `VARCHAR(100) UNIQUE` | NIT / RFC. Globally unique. |
+| `email` | `VARCHAR(200)` | |
+| `phone` | `VARCHAR(50)` | |
+| `status` | `tenant_status_enum` | `'Activo' \| 'Inactivo' \| 'Suspendido'` |
+| `created_at` | `TIMESTAMP` | |
+| `updated_at` | `TIMESTAMP` | |
+
+---
+
+### `users`
+
+Operational users. Linked to Supabase Auth via `auth_user_id`.
+
+| Column | Type | Notes |
+|---|---|---|
+| `id` | `UUID PK` | |
+| `tenant_id` | `UUID` | `NULL` for `SUPER_ADMIN` platform users. |
+| `auth_user_id` | `UUID UNIQUE` | Maps to `auth.users.id` in Supabase. |
+| `employee_code` | `VARCHAR(50)` | |
+| `first_name` | `VARCHAR(100)` | |
+| `last_name` | `VARCHAR(100)` | |
+| `email` | `VARCHAR(200)` | Unique per tenant. |
+| `phone` | `VARCHAR(50)` | |
+| `site_id` | `UUID` | FK → `sites(id)`. |
+| `area_id` | `UUID` | FK → `areas(id)`. |
+| `manager_id` | `UUID` | Self-referencing FK for org hierarchy. |
+| `is_platform_user` | `BOOLEAN` | `true` for `SUPER_ADMIN` — bypasses all RLS. |
+| `status` | `user_status_enum` | `'Activo' \| 'Inactivo' \| 'Bloqueado'` |
+
+---
+
+### `user_permissions`
+
+Row-level permission overrides — grants or revokes individual permissions outside of role assignments.
+
+| Column | Type | Notes |
+|---|---|---|
+| `id` | `UUID PK` | |
+| `tenant_id` | `UUID` | |
+| `user_id` | `UUID` | FK → `users(id)`. |
+| `permission_id` | `UUID` | FK → `permissions(id)`. |
+| `granted` | `BOOLEAN` | `true` = explicit grant; `false` = explicit revoke. |
+| `assigned_at` | `TIMESTAMP` | |
+| `assigned_by` | `UUID` | FK → `users(id)`. |
+
+---
+
+### `clients`
+
+B2B customer companies. Each client belongs to exactly one tenant.
+
+| Column | Type | Notes |
+|---|---|---|
+| `id` | `UUID PK` | |
+| `tenant_id` | `UUID NOT NULL` | |
+| `client_code` | `VARCHAR(50)` | Auto-generated `CLI-000001` by trigger. Immutable after creation. |
+| `client_type` | `VARCHAR(50)` | `'Empresa' \| 'Persona'` |
+| `legal_name` | `VARCHAR(250)` | Full legal name. |
+| `commercial_name` | `VARCHAR(250)` | Trade name. |
+| `tax_id` | `VARCHAR(100)` | Unique per tenant (`UNIQUE(tenant_id, tax_id)`). |
+| `industry` | `VARCHAR(150)` | Segment / industry vertical. |
+| `email` | `VARCHAR(200)` | |
+| `phone` | `VARCHAR(50)` | |
+| `country` | `VARCHAR(100)` | |
+| `city` | `VARCHAR(100)` | |
+| `assigned_user_id` | `UUID NOT NULL` | Account owner. FK → `users(id)`. |
+| `status` | `VARCHAR(50)` | `PROSPECTO \| ACTIVO \| INACTIVO \| BLOQUEADO \| ARCHIVADO` |
+| `deleted_at` | `TIMESTAMP` | Soft-delete. |
+
+---
+
+### `client_contacts`
+
+Individual contacts within a client company.
+
+| Column | Type | Notes |
+|---|---|---|
+| `id` | `UUID PK` | |
+| `client_id` | `UUID NOT NULL` | FK → `clients(id)`. |
+| `tenant_id` | `UUID NOT NULL` | |
+| `first_name` | `VARCHAR(100)` | |
+| `last_name` | `VARCHAR(100)` | |
+| `position` | `VARCHAR(150)` | Job title. |
+| `email` | `VARCHAR(200)` | |
+| `phone` | `VARCHAR(50)` | |
+| `mobile` | `VARCHAR(50)` | |
+| `is_primary` | `BOOLEAN` | A trigger enforces at most one primary contact per client. |
+| `status` | `VARCHAR(50)` | `'ACTIVO' \| 'INACTIVO'` |
+| `deleted_at` | `TIMESTAMP` | |
+
+---
+
+### `requirements`
+
+Customer service requests and technical requirements.
+
+| Column | Type | Notes |
+|---|---|---|
+| `id` | `UUID PK` | |
+| `tenant_id` | `UUID NOT NULL` | |
+| `requirement_code` | `VARCHAR(50)` | Auto-generated sequential code. |
+| `title` | `VARCHAR(250)` | Short description. |
+| `category` | `VARCHAR(100)` | Service type (e.g. `fabricacion`). |
+| `priority` | `VARCHAR` | `'LOW' \| 'MEDIUM' \| 'HIGH'` |
+| `status` | `VARCHAR` | `BORRADOR \| NUEVO \| EN_REVISION \| DIAGNOSTICO \| COTIZACION \| COMPLETADO \| CANCELADO` |
+| `client_id` | `UUID NOT NULL` | FK → `clients(id)`. |
+| `engineering_user_id` | `UUID` | Assigned engineer. FK → `users(id)`. |
+| `sales_user_id` | `UUID` | Assigned sales rep. FK → `users(id)`. |
+| `deleted_at` | `TIMESTAMP` | |
+
+---
+
+### `quotes`
+
+Commercial quotations linked to clients and optionally to a requirement.
+
+| Column | Type | Notes |
+|---|---|---|
+| `id` | `UUID PK` | |
+| `tenant_id` | `UUID NOT NULL` | |
+| `quote_code` | `VARCHAR(50)` | Auto-generated sequential code. |
+| `client_id` | `UUID NOT NULL` | FK → `clients(id)`. |
+| `requirement_id` | `UUID` | Optional FK → `requirements(id)`. |
+| `assigned_user_id` | `UUID` | Quote owner. FK → `users(id)`. |
+| `valid_until` | `DATE` | Quote expiry date. |
+| `subtotal` | `NUMERIC` | Pre-tax total. |
+| `total_amount` | `NUMERIC` | Final amount including tax. |
+| `status` | `VARCHAR` | `BORRADOR \| EN_REVISION \| ENVIADA \| APROBADA \| RECHAZADA \| VENCIDA` |
+
+---
+
+### `quote_items`
+
+Line items belonging to a quote.
+
+| Column | Type | Notes |
+|---|---|---|
+| `id` | `UUID PK` | |
+| `quote_id` | `UUID NOT NULL` | FK → `quotes(id)`. |
+| `tenant_id` | `UUID NOT NULL` | |
+| `item_order` | `INTEGER` | Display sort order. |
+| `item_type` | `VARCHAR` | Product, service, etc. |
+| `description` | `TEXT` | |
+| `quantity` | `NUMERIC` | |
+| `unit` | `VARCHAR` | Unit of measure (e.g. `"UNIDAD"`). |
+| `unit_price` | `NUMERIC` | |
+| `discount_amount` | `NUMERIC` | Absolute discount (not percentage). |
+| `tax_percent` | `NUMERIC` | Tax rate applied to this line. |
+
+---
+
+### `jobs`
+
+Field service work orders.
+
+| Column | Type | Notes |
+|---|---|---|
+| `id` | `UUID PK` | |
+| `tenant_id` | `UUID NOT NULL` | |
+| `job_code` | `VARCHAR(50)` | Auto-generated `JOB-2026-XXX`. |
+| `client_id` | `UUID` | FK → `clients(id)`. |
+| `requirement_id` | `UUID` | FK → `requirements(id)`. |
+| `site_id` / `area_id` | `UUID` | FK → `sites(id)` / `areas(id)`. |
+| `title` | `VARCHAR(100)` | |
+| `description` | `TEXT` | |
+| `assigned_user_id` | `UUID` | Assigned technician/engineer. |
+| `planned_start_date` | `TIMESTAMPTZ` | |
+| `planned_end_date` | `TIMESTAMPTZ` | |
+| `priority` | `VARCHAR` | `LOW \| MEDIUM \| HIGH` |
+| `status` | `VARCHAR` | `PENDIENTE \| EN_EJECUCION \| COMPLETADA \| CANCELADA` |
+
+---
+
+### `inventory_items`
+
+Product/material master data.
+
+| Column | Type | Notes |
+|---|---|---|
+| `id` | `UUID PK` | |
+| `tenant_id` | `UUID NOT NULL` | |
+| `item_code` | `VARCHAR(50)` | Unique per tenant. |
+| `name` | `VARCHAR(250)` | |
+| `category` | `VARCHAR(100)` | |
+| `unit_type` | `VARCHAR(50)` | Unit of measure. |
+| `purchase_price` | `NUMERIC` | Cost price. |
+| `reorder_point` | `NUMERIC` | Minimum stock before reorder alert. |
+
+---
+
+### `inventory_movements`
+
+Inventory transaction log (entrances, exits, transfers).
+
+| Column | Type | Notes |
+|---|---|---|
+| `id` | `UUID PK` | |
+| `tenant_id` | `UUID NOT NULL` | |
+| `movement_code` | `VARCHAR(50)` | Auto-generated `MOV-2026-XXXX`. |
+| `item_id` | `UUID NOT NULL` | FK → `inventory_items(id)`. |
+| `movement_type` | `VARCHAR` | `Entrada \| Salida \| Transferencia` |
+| `quantity` | `NUMERIC` | |
+| `unit_cost` | `NUMERIC` | Cost at time of movement. |
+| `warehouse_id` | `UUID` | FK → `warehouses(id)`. Used for Entrada/Salida. |
+| `source_warehouse_id` | `UUID` | FK for transfers. |
+| `destination_warehouse_id` | `UUID` | FK for transfers. |
+| `status` | `VARCHAR` | `Aplicado \| Pendiente \| Cancelado` |
+
+---
+
+### `invoices`
+
+Billing documents issued to clients.
+
+| Column | Type | Notes |
+|---|---|---|
+| `id` | `UUID PK` | |
+| `tenant_id` | `UUID NOT NULL` | |
+| `invoice_code` | `VARCHAR(50)` | Auto-generated `FAC-2026-XXXX`. |
+| `client_id` | `UUID NOT NULL` | FK → `clients(id)`. |
+| `quote_id` | `UUID` | Optional FK → `quotes(id)`. |
+| `invoice_date` | `DATE` | |
+| `due_date` | `DATE` | |
+| `subtotal_amount` | `NUMERIC` | |
+| `tax_amount` | `NUMERIC` | |
+| `total_amount` | `NUMERIC` | |
+| `paid_amount` | `NUMERIC` | Cumulative payments received. |
+| `balance_amount` | `NUMERIC` | `total_amount − paid_amount`. |
+| `status` | `VARCHAR` | `BORRADOR \| EMITIDA \| PARCIALMENTE_PAGADA \| PAGADA \| ANULADA` |
+| `payment_status` | `VARCHAR` | Wompi gateway status mirror. |
+| `payment_link` | `TEXT` | Checkout URL. |
+| `deleted_at` | `TIMESTAMP` | |
+
+---
+
+### `payment_gateways`
+
+Payment provider credentials per tenant.
+
+| Column | Type | Notes |
+|---|---|---|
+| `id` | `UUID PK` | |
+| `tenant_id` | `UUID NOT NULL` | |
+| `gateway_type` | `VARCHAR` | `'WOMPI'` (extensible to Stripe, PayU, etc.). |
+| `public_key` | `TEXT` | Publishable key — safe to expose in checkout widget. |
+| `api_url` | `TEXT` | Gateway API base URL. |
+| `environment` | `VARCHAR` | `'sandbox' \| 'production'` |
+| `is_active` | `BOOLEAN` | Only one active gateway is used per tenant. |
+
+---
+
+### `leads`
+
+CRM lead records created from the wizard form, contact forms, or manually by sales.
+
+| Column | Type | Notes |
+|---|---|---|
+| `id` | `UUID PK` | |
+| `tenant_id` | `UUID NOT NULL` | |
+| `client_id` | `UUID` | FK → `clients(id)`. |
+| `contact_id` | `UUID` | FK → `client_contacts(id)`. |
+| `lead_source` | `VARCHAR` | `WEBSITE \| MANUAL \| REFERIDO` etc. |
+| `score` | `INTEGER` | 0–100 priority score. |
+| `risk_level` | `VARCHAR` | `CALIENTE \| TIBIO \| FRIO \| SPAM` |
+| `status` | `VARCHAR` | `NUEVO \| EN_SEGUIMIENTO \| CONVERTIDO \| PERDIDO` |
+| `assigned_user_id` | `UUID` | FK → `users(id)`. |
+| `notes` | `TEXT` | |
+
+---
+
+### `audit_log`
+
+Append-only table capturing every INSERT, UPDATE, and soft-DELETE across all operational tables via a generic PostgreSQL trigger.
+
+| Column | Type | Notes |
+|---|---|---|
+| `id` | `UUID PK` | |
+| `tenant_id` | `UUID` | |
+| `event_code` | `VARCHAR(50)` | Auto-generated `ACC-XXXXXX`. |
+| `entity_type` | `VARCHAR(100)` | Table name (e.g. `"clients"`). |
+| `entity_id` | `UUID` | Primary key of the affected record. |
+| `action` | `VARCHAR(50)` | `CREATE \| UPDATE \| DELETE` |
+| `old_values` | `JSONB` | Row state before the change. `NULL` for INSERT. |
+| `new_values` | `JSONB` | Row state after the change. `NULL` for DELETE. |
+| `user_id` | `UUID` | FK → `users(id)`. Resolved from `auth.uid()`. |
+| `ip_address` | `VARCHAR(100)` | |
+| `user_agent` | `TEXT` | |
+| `created_at` | `TIMESTAMP` | |
+
+<Note>
+  `audit_log` is append-only. A trigger blocks physical `DELETE` statements with `RAISE EXCEPTION`. Records are **never** updated or logically deleted. This guarantees a complete and tamper-evident forensic trail.
+</Note>
+
+---
+
+### `tenant_settings`
+
+Key-value configuration store per tenant, organised by module.
+
+| Column | Type | Notes |
+|---|---|---|
+| `id` | `UUID PK` | |
+| `tenant_id` | `UUID NOT NULL` | |
+| `module` | `VARCHAR` | Logical group: `EMPRESA \| LOCALIZACION \| IDENTIDAD \| DOCUMENTOS` etc. |
+| `config_key` | `VARCHAR` | Setting name (e.g. `color_primario`). |
+| `config_value` | `JSONB` | Setting value — any JSON-serialisable type. |
+| `is_public` | `BOOLEAN` | Whether the value can be read by unauthenticated requests. |
+| `is_encrypted` | `BOOLEAN` | Encrypted values are decrypted via the `get_tenant_setting` RPC. |
+| `updated_at` | `TIMESTAMPTZ` | |
+
+Unique constraint: `(tenant_id, module, config_key)`.
+
+---
+
+## Relationships Diagram
+
+```
+tenants ─────────────────────────────────────────────────┐
+   │                                                       │
+   ├─ users (tenant_id)                                    │
+   │    └─ user_roles → roles                              │
+   │    └─ user_permissions → permissions                  │
+   │                                                       │
+   ├─ clients (tenant_id) ──────────────────┐              │
+   │    └─ client_contacts (client_id)      │              │
+   │                                        │              │
+   ├─ requirements (tenant_id, client_id) ──┤              │
+   │                                        │              │
+   ├─ quotes (tenant_id, client_id) ────────┤              │
+   │    └─ quote_items (quote_id)           │              │
+   │                                        │              │
+   ├─ jobs (tenant_id, client_id,           │              │
+   │        requirement_id)                 │              │
+   │                                        │              │
+   ├─ invoices (tenant_id, client_id,       │              │
+   │            quote_id)                   │              │
+   │    └─ invoice_items (invoice_id)       │              │
+   │    └─ payment_transactions             │              │
+   │         └─ payments                   │              │
+   │         └─ payment_reconciliations    │              │
+   │                                        │              │
+   ├─ leads (tenant_id, client_id) ─────────┘              │
+   │    └─ diagnostic_reports (lead_id)                    │
+   │                                                       │
+   ├─ inventory_items (tenant_id)                          │
+   │    └─ inventory_movements (item_id)                   │
+   │                                                       │
+   ├─ payment_gateways (tenant_id)                         │
+   ├─ tenant_settings (tenant_id)                          │
+   ├─ tenant_branding_version (tenant_id)                  │
+   └─ audit_log (tenant_id) ──────────────────────────────┘
+```

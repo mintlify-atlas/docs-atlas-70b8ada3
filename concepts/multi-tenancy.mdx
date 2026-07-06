@@ -1,0 +1,134 @@
+---
+title: "Multi-Tenancy: Database-Level Tenant Isolation with RLS"
+sidebarTitle: "Multi-Tenancy"
+description: "B2B Import ERP isolates each company's data using PostgreSQL Row-Level Security policies, ensuring zero cross-tenant data leakage at the database layer."
+---
+
+B2B Import ERP is a shared-database, shared-schema multi-tenant platform. Every company (tenant) operates on the same PostgreSQL instance and the same table structure, but their data is kept in complete isolation at the database engine level via **Row-Level Security (RLS)**. This approach gives tenants an independent operational experience without requiring separate databases or schemas, while still guaranteeing that no record from Company A is ever visible to users of Company B — not even if there is a bug in application code.
+
+## How It Works
+
+Every operational table in the system carries a mandatory `tenant_id UUID NOT NULL` column that references the `tenants(id)` primary key. RLS policies attached to each table intercept every query issued by an authenticated user and automatically append an implicit `WHERE` clause that restricts results to the rows owned by the user's own tenant.
+
+The mechanism relies on two PostgreSQL primitives exposed by Supabase:
+
+- **`auth.uid()`** — returns the UUID of the currently authenticated user as declared in the JWT.
+- **`users` table lookup** — maps that `auth_user_id` to the application's `tenant_id` and `is_platform_user` flag.
+
+### Standard RLS Policy Pattern
+
+Every tenant-scoped table follows this policy template:
+
+```sql
+CREATE POLICY tenant_isolation_policy ON target_table
+  FOR ALL
+  USING (
+    (SELECT is_platform_user FROM users WHERE auth_user_id = auth.uid()) = true
+    OR
+    tenant_id = (SELECT tenant_id FROM users WHERE auth_user_id = auth.uid())
+  );
+```
+
+The policy has two branches:
+
+1. **Platform bypass** — if `is_platform_user` is `true`, the predicate evaluates to `true` unconditionally and all rows are returned (used only by `SUPER_ADMIN`).
+2. **Tenant isolation** — otherwise, only rows whose `tenant_id` matches the authenticated user's own `tenant_id` pass the filter.
+
+A matching `WITH CHECK` clause is applied on `INSERT` and `UPDATE` to prevent a user from writing data into a different tenant's partition, even if they somehow construct a rogue payload.
+
+---
+
+## SUPER\_ADMIN Bypass
+
+Platform-level administrators are represented in the `users` table with two special column values:
+
+| Column             | Value  | Meaning                                   |
+| :----------------- | :----- | :---------------------------------------- |
+| `tenant_id`        | `NULL` | Not affiliated with any company           |
+| `is_platform_user` | `true` | Bypasses all RLS tenant-isolation filters |
+| `site_id`          | `NULL` | No site assignment                        |
+| `area_id`          | `NULL` | No area assignment                        |
+
+When `is_platform_user = true`, the first branch of every RLS policy short-circuits to `true`, granting full cross-tenant read and write access. This allows `SUPER_ADMIN` users to perform operations such as provisioning new tenants, inspecting platform-wide audit logs, and applying global configuration — none of which is accessible to tenant-level users.
+
+<Warning>
+  The `service_role` Supabase key bypasses RLS entirely. It must **never** be exposed to the frontend or used in ordinary Server Actions. Reserve it strictly for background system tasks (migrations, seeding, scheduled jobs) executed outside the request lifecycle.
+</Warning>
+
+---
+
+## Tenant Resolution in Server Actions
+
+URL-based tenant routing is the entry point for multi-tenancy on the application side. Each tenant accesses the ERP through a unique URL slug (e.g., `/acme/dashboard`, `/apex/dashboard`). The `tenantCode` extracted from the URL is passed into every Server Action, which resolves it to the internal `tenant_id` UUID via `getTenantId()`:
+
+```ts
+// src/app/actions.ts
+"use server";
+
+export async function getTenantId(tenantCode?: string | null): Promise<string> {
+  if (tenantCode === "apex") {
+    return "b0000000-0000-0000-0000-000000000000";
+  }
+  return "a0000000-0000-0000-0000-000000000000"; // default → acme
+}
+```
+
+Every Server Action then passes the resolved UUID to Supabase queries so that the application-layer `tenant_id` filter is always consistent with the RLS policy enforced at the database layer:
+
+```ts
+export async function getClients(tenantCode?: string | null) {
+  const tenantId = await getTenantId(tenantCode);
+
+  const { data, error } = await supabaseAdmin
+    .from("clients")
+    .select("id, tax_id, legal_name, industry, status")
+    .eq("tenant_id", tenantId)
+    .is("deleted_at", null)
+    .order("created_at", { ascending: false });
+
+  // ...
+}
+```
+
+This dual-layer protection (application filter + RLS) means that a misconfiguration at one layer is caught by the other.
+
+<Warning>
+  Never call Supabase directly from client components for any write operation. All mutations — creating clients, approving quotes, recording inventory movements — must go through **Next.js Server Actions** (`"use server"`). Client components may only read data that has already been fetched and passed as props or loaded through React Server Components.
+</Warning>
+
+---
+
+## Demo Tenants
+
+The development and staging environments ship with two pre-provisioned demo tenants:
+
+| Slug   | Company Name        | Primary Color                         | Theme |
+| :----- | :------------------ | :------------------------------------ | :---- |
+| `acme` | AeroMax Industrial  | `199 89% 48%` (Sky Blue)              | Dark  |
+| `apex` | Apex Logística B2B  | `142 72% 29%` (Forest Green)          | Dark  |
+
+Both tenants are fully isolated from each other. Logging in with an `acme` credential will never surface `apex` records, and vice versa — enforced simultaneously at the application layer and the PostgreSQL RLS layer.
+
+---
+
+## `TenantConfig` Interface
+
+The frontend representation of a tenant's basic identity is typed as `TenantConfig` in `src/utils/tenant.ts`:
+
+```ts
+export interface TenantConfig {
+  name: string;
+  primaryColor: string; // HSL value, e.g. "215 80% 50%"
+  theme?: "light" | "dark";
+}
+```
+
+`getTenantConfig(tenantCode?)` resolves a slug to its `TenantConfig` at render time for auth pages (login, recovery, reset-password), ensuring branded styling is applied even before a user is fully authenticated.
+
+---
+
+## Additional Safeguards
+
+- **Insertion triggers** — `BEFORE INSERT OR UPDATE` triggers verify that the `tenant_id` being written matches the session user's own `tenant_id`, blocking any attempt to cross-write data via a crafted payload.
+- **Soft deletes only** — rows are never physically deleted. A `deleted_at` timestamp marks logical removal, preserving the audit trail.
+- **`permissions` table is global** — the `permissions` catalogue has `USING (true)` for all authenticated users (read-only) because permission codes are not tenant-specific. Only `SUPER_ADMIN` can insert or modify permission definitions.
