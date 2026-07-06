@@ -1,5 +1,5 @@
 ---
-title: "Environment Variables: Configuration Reference for Deployment"
+title: "Environment Variables: ERP Runtime Configuration Guide"
 sidebarTitle: "Environment"
 description: "All environment variables required to run B2B Import ERP. Supabase credentials are required; optional variables enable specific integrations."
 ---
@@ -37,7 +37,7 @@ These variables are read by migration scripts and standalone test scripts that u
 </ParamField>
 
 <Note>
-  The test connection script (`scripts/test-conn.ts`) connects directly via the `pg` client using host, port, user, password, and database parameters. Provide at least one of the above connection strings when running migration or validation scripts outside of the Supabase dashboard.
+  The test connection script (`scripts/test-conn.ts`) connects directly via the `pg` client using hardcoded `host`, `port`, `user`, `password`, and `database` parameters — it does not read `DATABASE_URL` or `SUPABASE_DB_URL` from the environment. Update those values in the script file directly if you need to validate connectivity against a different Supabase project.
 </Note>
 
 ## Optional Variables

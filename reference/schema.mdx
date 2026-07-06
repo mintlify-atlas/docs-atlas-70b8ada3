@@ -319,7 +319,7 @@ Append-only table capturing every INSERT, UPDATE, and soft-DELETE across all ope
 |---|---|---|
 | `id` | `UUID PK` | |
 | `tenant_id` | `UUID` | |
-| `event_code` | `VARCHAR(50)` | Auto-generated `ACC-XXXXXX`. |
+| `event_code` | `VARCHAR(50)` | Event type identifier set by the trigger, e.g. `CLIENT_CREATED`, `CLIENT_STATUS_CHANGED`. |
 | `entity_type` | `VARCHAR(100)` | Table name (e.g. `"clients"`). |
 | `entity_id` | `UUID` | Primary key of the affected record. |
 | `action` | `VARCHAR(50)` | `CREATE \| UPDATE \| DELETE` |

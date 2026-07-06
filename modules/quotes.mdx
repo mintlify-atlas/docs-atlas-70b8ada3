@@ -1,5 +1,5 @@
 ---
-title: "Quotes Module: Commercial Proposals with Line Items and Approvals"
+title: "Quotes Module: Line-Item Proposals and Approval Flows"
 sidebarTitle: "Quotes"
 description: "Create multi-item quotations linked to requirements, version them through review cycles, and convert approved quotes to work orders with full PDF export."
 ---
@@ -12,7 +12,7 @@ The Quotes module handles the creation and lifecycle management of commercial pr
 
 Quote states are enforced by the `validate_quote_state_transitions` trigger. States marked as **final** cannot be changed once reached.
 
-```
+```text
 BORRADOR
    │
    ├──► CANCELADA  (final — only from BORRADOR)
@@ -81,7 +81,7 @@ interface QuoteRow {
 
 Line items are stored in the `quote_items` table and linked to a quote via `quote_id`. The `trg_calculate_quote_item_totals` trigger computes line amounts automatically on every insert or update:
 
-```
+```text
 subtotal_linea = quantity × unit_price
 tax_amount     = (subtotal_linea - discount_amount) × tax_percent / 100
 line_total     = subtotal_linea - discount_amount + tax_amount
@@ -89,7 +89,7 @@ line_total     = subtotal_linea - discount_amount + tax_amount
 
 After any change to `quote_items`, `trg_update_quote_totals` recalculates the quote header:
 
-```
+```text
 quotes.subtotal      = SUM(quote_items.line_total)
 quotes.total_amount  = subtotal - discount_amount + tax_amount
 ```
@@ -212,9 +212,10 @@ See the [Approvals module](/modules/approvals) for the full approval workflow an
 
 | Permission | Roles |
 |---|---|
-| `quotes.create` | `EJECUTIVO_COMERCIAL`, `DIRECTOR_COMERCIAL`, `GERENTE_GENERAL` |
+| `quotes.create` | `ADMIN_EMPRESA`, `GERENTE_GENERAL`, `DIRECTOR_COMERCIAL`, `EJECUTIVO_COMERCIAL` |
 | `quotes.submit` (→ `EN_REVISION`, `ENVIADA`) | `EJECUTIVO_COMERCIAL`, `DIRECTOR_COMERCIAL` |
 | `quotes.approve` (→ `APROBADA`, `RECHAZADA`) | `GERENTE_GENERAL`, `DIRECTOR_COMERCIAL` |
+| `quotes.view` | `ADMIN_EMPRESA`, `GERENTE_GENERAL`, `DIRECTOR_COMERCIAL`, `EJECUTIVO_COMERCIAL`, `DIRECTOR_OPERACIONES`, `AUDITOR`, `CLIENTE` |
 | `quotes.cancel` | `EJECUTIVO_COMERCIAL`, `DIRECTOR_COMERCIAL`, `GERENTE_GENERAL` |
 
 ---
@@ -223,6 +224,6 @@ See the [Approvals module](/modules/approvals) for the full approval workflow an
 
 Navigate to the Quotes dashboard for your tenant:
 
-```
+```text
 /dashboard/quotes?tenant=<code>
 ```

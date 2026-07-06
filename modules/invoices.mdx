@@ -1,7 +1,7 @@
 ---
 title: "Invoices Module: Billing Generation and Document Management"
 sidebarTitle: "Invoices"
-description: "Generate invoices from approved quotes, attach supporting documents, export to PDF with tenant branding, and track payment status through to reconciliation."
+description: "Generate invoices from approved quotes, export to PDF with tenant branding, and track payment status through to full reconciliation automatically."
 ---
 
 The Invoices module handles the complete billing lifecycle in B2B Import ERP — from drafting a commercial document against an approved quote or closed job, through formal issuance and tax freezing, to full payment reconciliation. Every invoice is permanently traceable to its commercial origin (`quote_id` or `job_id`), and its financial totals are automatically computed from line items via database triggers. Once emitted, an invoice is immutable; corrections require a credit or debit note.

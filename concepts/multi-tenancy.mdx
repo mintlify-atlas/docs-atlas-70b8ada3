@@ -102,10 +102,11 @@ This dual-layer protection (application filter + RLS) means that a misconfigurat
 
 The development and staging environments ship with two pre-provisioned demo tenants:
 
-| Slug   | Company Name        | Primary Color                         | Theme |
-| :----- | :------------------ | :------------------------------------ | :---- |
-| `acme` | AeroMax Industrial  | `199 89% 48%` (Sky Blue)              | Dark  |
-| `apex` | Apex Logística B2B  | `142 72% 29%` (Forest Green)          | Dark  |
+| Slug        | Company Name        | Primary Color                | Theme |
+| :---------- | :------------------ | :--------------------------- | :---- |
+| `acme`      | AeroMax Industrial  | `199 89% 48%` (Sky Blue)     | Dark  |
+| `ventitech` | AeroMax Industrial  | `199 89% 48%` (Sky Blue)     | Dark  |
+| `apex`      | Apex Logística B2B  | `142 72% 29%` (Forest Green) | Dark  |
 
 Both tenants are fully isolated from each other. Logging in with an `acme` credential will never surface `apex` records, and vice versa — enforced simultaneously at the application layer and the PostgreSQL RLS layer.
 
@@ -121,6 +122,28 @@ export interface TenantConfig {
   primaryColor: string; // HSL value, e.g. "215 80% 50%"
   theme?: "light" | "dark";
 }
+
+export const MOCK_TENANTS: Record<string, TenantConfig> = {
+  acme: {
+    name: "AeroMax Industrial",
+    primaryColor: "199 89% 48%", // Sky Blue
+    theme: "dark",
+  },
+  ventitech: {
+    name: "AeroMax Industrial",
+    primaryColor: "199 89% 48%", // Sky Blue
+    theme: "dark",
+  },
+  apex: {
+    name: "Apex Logística B2B",
+    primaryColor: "142 72% 29%", // Forest Green
+    theme: "dark",
+  },
+  default: {
+    name: "AeroMax Industrial",
+    primaryColor: "240 5.9% 10%", // Default Dark
+  },
+};
 ```
 
 `getTenantConfig(tenantCode?)` resolves a slug to its `TenantConfig` at render time for auth pages (login, recovery, reset-password), ensuring branded styling is applied even before a user is fully authenticated.

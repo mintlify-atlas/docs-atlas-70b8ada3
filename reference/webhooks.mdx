@@ -1,5 +1,5 @@
 ---
-title: "Webhooks Reference: Wompi Payment Events Endpoint"
+title: "Webhooks Reference: Wompi Payment Gateway Endpoint"
 sidebarTitle: "Webhooks"
 description: "POST /api/webhooks/wompi receives Wompi payment gateway events. Validates the payload structure and updates invoice status based on transaction outcome."
 ---
@@ -43,19 +43,19 @@ Wompi may issue a `GET` request to verify that the endpoint is live before regis
 
 ### Request Format
 
-Wompi sends a JSON body with the following structure. The `event` field identifies the event type and `data.transaction` contains the transaction details.
+Wompi sends a JSON body with the following structure. The `event` field identifies the event type and `data` contains the transaction details directly.
 
 ```json
 {
   "event": "transaction.updated",
   "data": {
-    "transaction": {
-      "id": "TXN_123456",
-      "reference": "INV-2026-0042",
-      "status": "APPROVED",
-      "amount_in_cents": 150000000,
-      "currency": "COP"
-    }
+    "id": "TXN_123456",
+    "reference_id": "INV-2026-0042",
+    "status": "APPROVED",
+    "amount_in_cents": 150000000,
+    "currency": "COP",
+    "customer_email": "buyer@example.com",
+    "payment_method_type": "CARD"
   }
 }
 ```
@@ -64,11 +64,13 @@ Wompi sends a JSON body with the following structure. The `event` field identifi
 |---|---|---|
 | `event` | `string` | Event type. Currently `transaction.updated` is the primary event. |
 | `data` | `object` | Event payload container. |
-| `data.transaction.id` | `string` | Wompi's unique transaction identifier. |
-| `data.transaction.reference` | `string` | The reference string set when creating the checkout — matches `payment_transactions.reference_id`. |
-| `data.transaction.status` | `string` | `APPROVED`, `DECLINED`, `VOIDED`, or `ERROR`. |
-| `data.transaction.amount_in_cents` | `number` | Amount in centavos COP (divide by 100 for COP). |
-| `data.transaction.currency` | `string` | Always `"COP"` for Colombian Peso. |
+| `data.id` | `string` | Wompi's unique transaction identifier. |
+| `data.reference_id` | `string` | The reference string set when creating the checkout — matches `payment_transactions.reference_id`. Falls back to `data.id` if absent. |
+| `data.status` | `string` | `APPROVED`, `DECLINED`, `VOIDED`, or `ERROR`. |
+| `data.amount_in_cents` | `number` | Amount in centavos COP (divide by 100 for COP). |
+| `data.currency` | `string` | Always `"COP"` for Colombian Peso. |
+| `data.customer_email` | `string` | Payer email (optional). |
+| `data.payment_method_type` | `string` | Payment method, e.g. `"CARD"` or `"PSE"` (optional). |
 
 ### Validation
 

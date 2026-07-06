@@ -1,115 +1,75 @@
 ---
-title: "Analytics and Dashboards: KPIs, Costs, and Profitability"
+title: "Analytics Module: KPI Dashboards and Report Exports"
 sidebarTitle: "Analytics"
-description: "Monitor business performance with real-time dashboards covering commercial pipeline KPIs, operational metrics, cost tracking, and profitability analysis per job and client."
+description: "Real-time tenant-isolated dashboards with configurable KPI definitions, versioned formulas, and one-click exports to XLSX or branded PDF via jsPDF."
 ---
 
-The Analytics module gives every tenant a live view of their business performance across four dimensions: commercial pipeline health, operational throughput, financial health, and per-job profitability. All dashboards are tenant-isolated via Row Level Security and composed from modular, configurable widgets backed by the `dashboards`, `dashboard_widgets`, `kpi_definitions`, and `kpi_history` tables introduced in migration `20260617000015_dashboards_core.sql`.
+The Analytics module gives every tenant a live view of their business performance. All dashboards are tenant-isolated via Row Level Security and composed from modular, configurable widgets backed by the `dashboards`, `dashboard_widgets`, `kpi_definitions`, `kpi_formulas`, and `kpi_history` tables introduced in migration `20260617000015_dashboards_core.sql`. KPI values are pre-computed and stored in `kpi_history` using versioned formulas tracked in `kpi_formulas`.
 
 <Tip>
   Use the `?tenant=<code>` query parameter in your browser to switch between tenants in the demo environment. Each tenant's dashboard loads its own KPI history, widget layout, and branding without any re-login required.
 </Tip>
 
-## Dashboard Modules
+## Data Model
 
-### 1. Commercial Dashboard
+The analytics system is built on six tables:
 
-Tracks the health and velocity of the sales pipeline from lead generation to deal close.
-
-<CardGroup cols={2}>
-  <Card title="Pipeline Value by Stage" icon="funnel">
-    Total estimated value of all open requirements at each CRM stage — Nuevo, En Contacto, Calificado, Propuesta, Negociación.
-  </Card>
-  <Card title="Conversion Rates" icon="arrow-trend-up">
-    Stage-to-stage conversion percentages. Highlights where prospects drop out of the funnel.
-  </Card>
-  <Card title="Quote Win/Loss Ratio" icon="scale-balanced">
-    Percentage of issued proposals that closed as Ganado vs. Perdido, filterable by period and salesperson.
-  </Card>
-  <Card title="Leads by Score" icon="chart-bar">
-    Distribution of leads across CALIENTE, TIBIO, FRIO, and SPAM buckets for the selected date range.
-  </Card>
-</CardGroup>
-
-### 2. Operational Dashboard
-
-Provides a real-time view of work orders, technician capacity, and service throughput.
-
-<CardGroup cols={2}>
-  <Card title="Open Jobs by Status" icon="list-check">
-    Count of work orders grouped by status (Pendiente, En Proceso, En Revisión, Completado) with drill-down by service type.
-  </Card>
-  <Card title="Technician Workload" icon="users-gear">
-    Active job count per technician, highlighting overloaded and underutilized resources.
-  </Card>
-  <Card title="Average Completion Time" icon="clock">
-    Rolling average of job duration from creation to close, segmented by service category and urgency level.
-  </Card>
-</CardGroup>
-
-### 3. Financial Dashboard
-
-Monitors revenue recognition, receivables, and cash flow in real time.
-
-<CardGroup cols={2}>
-  <Card title="Revenue by Period" icon="chart-line">
-    Invoiced revenue aggregated by month, quarter, or custom date range. Compared against the same period in prior years.
-  </Card>
-  <Card title="Outstanding Invoices" icon="file-invoice-dollar">
-    Total value of unpaid invoices grouped by aging bucket: 0–30, 31–60, 61–90, and 90+ days past due.
-  </Card>
-  <Card title="Payment Collection Rate" icon="percent">
-    Percentage of invoiced value collected within the agreed payment terms.
-  </Card>
-  <Card title="Cash Flow" icon="money-bill-wave">
-    Rolling 30-day and 90-day cash flow projection based on issued invoices and expected payment dates.
-  </Card>
-</CardGroup>
-
-### 4. Cost Tracking
-
-Compares actual costs incurred on each job against the original estimate to surface budget variances early.
-
-| Metric | Description |
+| Table | Purpose |
 |---|---|
-| Actual vs. Estimated Cost | Per-job comparison of planned cost (from quote) vs. recorded actual cost |
-| Parts Cost per Work Order | Breakdown of materials and parts consumption per OT number |
-| Labor Cost per Job | Hours logged × labor rate by technician or team |
-| Cost Variance % | `(Actual − Estimated) / Estimated × 100` — positive = over budget |
+| `kpi_definitions` | Master list of KPI codes, names, categories, and units per tenant. Each KPI gets a sequential code (`KPI-000001`). |
+| `kpi_formulas` | Versioned SQL formula expressions for each KPI. Only one formula can be `active = true` per KPI at a time — the `deactivate_other_kpi_formulas` trigger enforces this automatically. |
+| `kpi_history` | Computed KPI values by `period` (e.g., `'2026-06'`, `'2026-W24'`). Each `(tenant_id, kpi_id, period)` combination is unique; recalculation uses upsert semantics. |
+| `dashboards` | Named dashboard configurations, optionally scoped to a `role_id`. Each gets a sequential code (`DSH-000001`). |
+| `dashboard_widgets` | Individual widgets inside a dashboard. Stores `widget_type`, grid position (`position_x`, `position_y`, `width`, `height`), and `configuration_json`. |
+| `dashboard_preferences` | Per-user layout customizations for a dashboard. Stored separately from the canonical widget definition. |
 
-### 5. Profitability Analysis
+## KPI Calculation Engine
 
-Calculates gross margin at the job, client, and service category level to identify the most and least profitable areas of the business.
+The `calculate_kpi(p_tenant_id, p_kpi_code, p_period)` database function handles computation and persistence in one call. It currently implements three built-in KPI codes:
 
-<CardGroup cols={3}>
-  <Card title="Gross Margin per Job" icon="sack-dollar">
-    Revenue from the associated invoice minus total actual costs for the work order.
-  </Card>
-  <Card title="Gross Margin per Client" icon="building">
-    Aggregated margin across all jobs for a given client, ranked by total contribution.
-  </Card>
-  <Card title="Margin per Service Category" icon="tags">
-    Fabricación, Venta, Mantenimiento, and Reparación compared side-by-side to identify high-margin offerings.
-  </Card>
-</CardGroup>
+| KPI Code | Description |
+|---|---|
+| `LEAD_SLA_BREACH_RATE` | Percentage of leads created in the period with `sla_status = 'INCUMPLIDO'`. |
+| `TOTAL_INVOICED` | Sum of `total_amount` across invoices in statuses `EMITIDA`, `PARCIALMENTE_PAGADA`, `PAGADA`, `VENCIDA` for the period. |
+| `TOTAL_PAYMENTS` | Sum of payments with `status = 'APLICADO'` for the period. |
+
+After computing the value, `calculate_kpi` upserts the result into `kpi_history` and emits a `KPI_CALCULATED` business event. Tenants can define additional KPI codes in `kpi_definitions` backed by custom formulas in `kpi_formulas`.
+
+## Dashboard Widget Types
+
+Each `dashboard_widgets` row has a `widget_type` that determines how it renders on the frontend. The confirmed types from the migration are:
+
+- **`BAR`** — Bar chart comparing values across categories or time periods.
+- **`LINE`** — Line chart for trend visualization over time.
+- **`KPI_CARD`** — Single-value metric card, typically showing the latest `kpi_history` value with a period label.
+
+Additional composite widget configurations are supported via `configuration_json`.
 
 ## Technology
 
-- **Charts**: all visualizations are built with [Recharts](https://recharts.org/), a composable React chart library. Widget types include `BAR`, `LINE`, `KPI_CARD`, and custom composite widgets.
-- **Data fetching**: dashboard data is fetched via Next.js Server Actions with full tenant isolation. KPI values are pre-computed and stored in `kpi_history` using configurable formulas in `kpi_formulas`.
+- **Charts**: all visualizations are built with [Recharts](https://recharts.org/) (`recharts` ^3.8.1), a composable React chart library that renders `BAR`, `LINE`, and custom widget types.
+- **Data fetching**: dashboard data is fetched via Next.js Server Actions with full tenant isolation enforced by Supabase RLS policies.
 - **Widget layout**: each widget's grid position (`position_x`, `position_y`, `width`, `height`) is persisted in `dashboard_widgets` and can be customized per user in `dashboard_preferences`.
-- **Immutable history**: the `block_physical_dashboard_delete` trigger prevents physical deletion of any KPI definition, formula, or historical record. Soft delete via `deleted_at` is the only permitted removal path.
+- **Immutable history**: the `block_physical_dashboard_delete` trigger prevents physical deletion of any KPI definition, formula, historical record, dashboard, widget, or preference row. Soft delete via `deleted_at` is the only permitted removal path.
 
 ## Exports
 
 <CardGroup cols={2}>
   <Card title="Excel (XLSX)" icon="file-excel">
-    Dashboard data can be exported to an Excel workbook using the `file-exports.ts` utility. Includes a formatted table per KPI category with the tenant name and date range in the header.
+    Dashboard data can be exported to an Excel workbook using the `xlsx` library (^0.18.5). The export includes a formatted table per KPI category with the tenant name and date range in the header row.
   </Card>
   <Card title="PDF Reports" icon="file-pdf">
-    Summary reports are exportable as PDF using jsPDF with tenant branding — logo, primary color, and company name are pulled from `tenant_settings` at generation time. The same engine is used by the Wizard to generate pre-engineering diagnostic reports.
+    Summary reports are exportable as PDF using `jspdf` (^4.2.1) with tenant branding applied at generation time — logo, primary color, and company name are pulled from `tenant_settings` via `getTenantBranding()`. The same PDF engine is used by the Wizard to generate pre-engineering diagnostic reports.
   </Card>
 </CardGroup>
+
+## Access Control
+
+RLS policies on all six analytics tables allow:
+- **All authenticated users** to read their tenant's active data.
+- **Users with the `AUDITOR` role** to also query soft-deleted records.
+- **`ADMINISTRADOR_TENANT`, `GERENTE`, `GERENTE_GENERAL`** to write KPI definitions, formulas, and dashboard configurations.
+- **Platform super-admins** to access all tenants cross-tenant.
 
 ## Dashboard URL
 
@@ -117,4 +77,4 @@ Calculates gross margin at the job, client, and service category level to identi
 /dashboard?tenant=<code>
 ```
 
-The default route loads the Commercial Dashboard. Navigate between dashboard types using the top tabs or the sidebar shortcut links.
+The default route loads the primary dashboard for the authenticated user's role. Navigate between dashboards using the top tabs or the sidebar shortcut links.

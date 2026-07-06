@@ -121,8 +121,8 @@ Every table has a `tenant_id UUID NOT NULL` column. PostgreSQL RLS policies enfo
 **4. Every state transition must go through domain services.**
 State changes (e.g., quote status `DRAFT → PENDING_APPROVAL`, invoice status `ISSUED → PAID`) are handled by Server Actions that: (a) validate the caller has the required role, (b) verify the transition is legal given the current state, (c) write the new state, and (d) insert a row into `audit_log`. No direct `UPDATE status = 'X'` from the UI is permitted.
 
-**5. Client Components (`"use client"`) are allowed only for interactive UI.**
-The two authorised `"use client"` components are `WizardStepper.tsx` (real-time CFM calculations, 60 fps counters, dynamic PDF rendering) and `CatalogView.tsx` (interactive product filtering and autocomplete). All other pages and layouts are React Server Components by default.
+**5. Client Components (`"use client"`) are restricted to interactive UI only.**
+Client component usage is limited to components that require browser APIs, real-time state, or animation: `WizardStepper.tsx` (multi-step CFM calculations, dynamic PDF rendering), `CatalogView.tsx` (product filtering and autocomplete), `CatalogSearch.tsx`, `LandingCfmCalculator.tsx`, `SupportChat.tsx`, and layout utilities such as `dashboard-header.tsx` and `layout-context.tsx`. All pages and non-interactive layouts are React Server Components by default.
 
 **6. Soft delete everywhere — no physical deletes.**
 All operational tables include `deleted_at TIMESTAMPTZ` and `deleted_by UUID` columns. The application uses `.is('deleted_at', null)` filters on every read. `DELETE` statements are prohibited in application code.
@@ -143,24 +143,46 @@ src/
 │   │   └── reset-password/
 │   ├── (dashboard)/              # Protected dashboard routes
 │   │   └── dashboard/
+│   │       ├── clients/
+│   │       ├── cms/
+│   │       ├── inventory/
+│   │       ├── invoices/
+│   │       ├── jobs/
+│   │       ├── leads/
+│   │       ├── purchases/
+│   │       ├── quotes/
+│   │       ├── requirements/
+│   │       └── settings/
 │   ├── actions/                  # All Server Actions — one file per module
 │   │   ├── branding.ts           # Tenant branding & white-label
 │   │   ├── catalog.ts            # Product catalog queries
-│   │   ├── catalog-chat.ts       # AI-free catalog assistant
+│   │   ├── catalog-chat.ts       # Catalog assistant
 │   │   ├── exports-finance.ts    # PDF/Excel financial exports
 │   │   ├── inventory-purchases.ts
 │   │   ├── leads.ts              # CRM lead management
 │   │   ├── leads-erp.ts          # Lead-to-ERP conversion
-│   │   ├── payments.ts
+│   │   ├── payments.ts           # Wompi payment gateway + webhook processing
 │   │   ├── quotes.ts
 │   │   ├── requirements.ts
 │   │   └── wizard.ts             # Pre-engineering wizard submission
 │   ├── actions.ts                # Core shared actions (clients, jobs, invoices, settings)
 │   ├── api/
-│   │   └── webhooks/             # Inbound webhook handlers
+│   │   └── webhooks/
+│   │       └── wompi/route.ts    # Wompi payment webhook handler
 │   ├── portal/                   # Client self-service portal
 │   └── wizard/                   # Public pre-engineering wizard pages
 ├── components/
+│   ├── CatalogSearch.tsx         # Interactive catalog search (client component)
+│   ├── CatalogView.tsx           # Product catalog with filtering (client component)
+│   ├── LandingCfmCalculator.tsx  # Public CFM calculator widget (client component)
+│   ├── ProcessesMapSVG.tsx       # Process map visualization (client component)
+│   ├── SupportChat.tsx           # Support chat widget (client component)
+│   ├── WizardStepper.tsx         # Multi-step pre-engineering wizard (client component)
+│   ├── dashboard-header.tsx      # Dashboard top navigation
+│   ├── dashboard-sidebar.tsx     # Dashboard side navigation
+│   ├── layout-context.tsx        # Shared layout state context
+│   ├── theme-provider.tsx        # next-themes provider wrapper
+│   ├── theme-toggle.tsx          # Dark/light mode toggle
 │   ├── marketing/                # Landing page and public-facing components
 │   └── ui/                       # Shared design-system primitives
 │       ├── avatar.tsx
@@ -201,8 +223,8 @@ The two Supabase client instances are defined in `src/utils/supabase.ts`:
 ```typescript
 import { createClient } from '@supabase/supabase-js';
 
-const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || '';
-const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || '';
+const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || process.env.SUPABASE_URL || '';
+const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || process.env.SUPABASE_ANON_KEY || '';
 const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY || '';
 
 // Client-safe instance (uses public anon key — respects RLS)

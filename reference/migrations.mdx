@@ -1,7 +1,7 @@
 ---
 title: "Database Migrations: Schema History and Deployment Guide"
 sidebarTitle: "Migrations"
-description: "B2B Import ERP has 30+ ordered SQL migrations in supabase/migrations/. Apply them in sequence using Supabase CLI or the SQL editor to provision a new database."
+description: "B2B Import ERP has 31 SQL migrations in supabase/migrations/. Apply them in ascending order via Supabase CLI or the SQL Editor to provision the database."
 ---
 
 All schema changes in B2B Import ERP are managed as numbered SQL migration files under `supabase/migrations/`. Each file is prefixed with a sortable timestamp so that migrations are always applied in deterministic order. The files are idempotent by convention — re-running a migration on an already-migrated database will either be a no-op (for `CREATE TABLE IF NOT EXISTS` patterns) or raise an error that can be safely ignored after inspection.
@@ -144,6 +144,9 @@ This file contains all migrations in order and can be pasted as a single SQL blo
   <Card title="20260620000037_branding_version.sql" icon="history">
     **Branding Version Tracking.** Adds version-number management and snapshot columns to `tenant_branding_version`. Enables the restore-to-previous-version feature in `restoreBrandingVersion()`.
   </Card>
+  <Card title="20260626000001_production_gaps.sql" icon="wrench">
+    **Production Gaps.** Adds tables missing from earlier migrations that are required for production: `vendors`, `purchase_orders`, and supporting tables for the procurement module, Wompi payment tracking, support chat, and full-text catalog search.
+  </Card>
 </CardGroup>
 
 ---
@@ -181,6 +184,7 @@ This file contains all migrations in order and can be pasted as a single SQL blo
 20260617000035_industrial_cms.sql
 20260619000036_fix_leads_schema.sql
 20260620000037_branding_version.sql
+20260626000001_production_gaps.sql
 ```
 
 <Tip>

@@ -1,7 +1,7 @@
 ---
-title: "Clients Module: Manage B2B Companies and Contacts"
+title: "Clients Module: Manage B2B Client Companies and Contacts"
 sidebarTitle: "Clients"
-description: "The Clients module manages the full lifecycle of B2B companies and contacts — from prospect intake through active, inactive, and archived states with full audit trail."
+description: "Manage B2B client companies from prospect intake through active, inactive, blocked, and archived states with per-tenant RLS and a full audit trail."
 ---
 
 The Clients module is the commercial foundation of B2B Import ERP. It centralises all information about the B2B companies your tenant serves — from the moment a company is registered as a prospect through its active commercial relationship, potential inactivation, and final archival. Every mutation is fully scoped to your tenant via Row Level Security and recorded in both the technical `audit_log` and the semantic `business_events` table.
@@ -12,7 +12,7 @@ The Clients module is the commercial foundation of B2B Import ERP. It centralise
 
 Clients move through a defined set of states enforced by database-level triggers. No status change can be performed directly against the database; all transitions must go through domain services that validate permissions, record audit entries, and emit business events.
 
-```
+```text
 PROSPECTO ──► ACTIVO ──► INACTIVO ──► ARCHIVADO
                 │
                 ▼
@@ -174,11 +174,11 @@ Access to the Clients module is governed by Supabase RLS policies and database-l
 
 | Action | Roles Permitted |
 |---|---|
-| **View clients** | All authenticated users of the tenant (`clients_select_tenant`) |
-| **Create client** | `EJECUTIVO_COMERCIAL`, `DIRECTOR_COMERCIAL`, `GERENTE_GENERAL`, `SUPER_ADMIN` |
-| **Edit client** | `EJECUTIVO_COMERCIAL`, `DIRECTOR_COMERCIAL`, `GERENTE_GENERAL`, `SUPER_ADMIN` |
-| **Change status** | `EJECUTIVO_COMERCIAL`, `DIRECTOR_COMERCIAL`, `GERENTE_GENERAL`, `SUPER_ADMIN` |
-| **View soft-deleted records** | `AUDITOR`, `SUPER_ADMIN` |
+| **View clients** | All authenticated tenant users (`clients_select_tenant`) |
+| **Create client** | `ADMIN_EMPRESA`, `GERENTE_GENERAL`, `DIRECTOR_COMERCIAL`, `EJECUTIVO_COMERCIAL` |
+| **Edit client** | `ADMIN_EMPRESA`, `GERENTE_GENERAL`, `DIRECTOR_COMERCIAL`, `EJECUTIVO_COMERCIAL` |
+| **Change status** | `ADMIN_EMPRESA`, `GERENTE_GENERAL`, `DIRECTOR_COMERCIAL`, `EJECUTIVO_COMERCIAL` |
+| **View soft-deleted records** | `AUDITOR` (and Platform Super Admin) |
 
 <Warning>
 RLS policies enforce `tenant_id` isolation at the database row level. It is impossible for a user in tenant A to read or write records belonging to tenant B, regardless of the application layer.
@@ -190,7 +190,7 @@ RLS policies enforce `tenant_id` isolation at the database row level. It is impo
 
 Navigate to the Clients dashboard for your tenant:
 
-```
+```text
 /dashboard/clients?tenant=<code>
 ```
 

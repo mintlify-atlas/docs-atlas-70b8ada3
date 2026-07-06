@@ -34,7 +34,7 @@ Approval workflows are fully configurable per tenant in **Settings → Approval 
 
 Each `approval_requests` record and each `approval_request_steps` record tracks its own state independently:
 
-```
+```text
 PENDIENTE
    │
    ├──► APROBADA            (all required steps approved)
@@ -156,6 +156,6 @@ Physical deletion of any approval entity is blocked by `block_physical_approval_
 
 Navigate to pending approvals for your tenant:
 
-```
+```text
 /dashboard/approvals?tenant=<code>
 ```

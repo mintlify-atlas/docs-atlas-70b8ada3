@@ -1,7 +1,7 @@
 ---
 title: "Requirements Module: Technical Request Intake and Routing"
 sidebarTitle: "Requirements"
-description: "Requirements capture client technical needs and route them through diagnosis, site visits, and quoting. Each requirement tracks priority, category, and assigned engineers."
+description: "Capture client technical needs and route them through diagnosis, quoting, and approval. Tracks priority, SLA deadlines, categories, and assigned engineers."
 ---
 
 A Requirement is the primary intake record for any client technical need in B2B Import ERP. In an industrial B2B context — such as HVAC engineering, extraction systems, or duct fabrication — clients express a need that must be understood, diagnosed, scoped, and ultimately converted into a quotation and then a work order. The Requirements module orchestrates this entire journey, assigning the right engineers and commercial staff at each phase, enforcing SLAs by priority, and blocking invalid transitions at the database level.
@@ -12,7 +12,7 @@ A Requirement is the primary intake record for any client technical need in B2B 
 
 Requirements follow a strict sequential workflow enforced by the `validate_requirement_state_transitions` and `enforce_requirement_permissions` triggers. No state can be skipped and no transition outside the matrix is permitted.
 
-```
+```text
 BORRADOR
    │
    ▼
@@ -196,6 +196,6 @@ Permission enforcement is handled by `enforce_requirement_permissions` trigger a
 
 Navigate to the Requirements dashboard for your tenant:
 
-```
+```text
 /dashboard/requirements?tenant=<code>
 ```

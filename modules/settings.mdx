@@ -1,81 +1,106 @@
 ---
-title: "Settings Module: Tenant Configuration and Preferences"
+title: "Settings Module: Tenant Configuration and White Label"
 sidebarTitle: "Settings"
-description: "Configure tenant-wide settings including company identity, approval thresholds, notification preferences, document numbering sequences, and user management."
+description: "Manage company identity, branding, ERP links, integrations, and telephony. All settings stored per tenant in the database, never in environment files."
 ---
 
-The Settings module is the central control panel for every tenant in B2B Import ERP. All configuration lives in the `tenant_settings` table as typed key-value pairs, organized by module category, and protected by Row Level Security so that one tenant can never read or modify another's settings. Changes take effect immediately without requiring a deployment or server restart.
+The Settings module is the central control panel for every tenant in B2B Import ERP. All configuration lives in the `tenant_settings` table as typed JSONB key-value pairs, organized by module category, and protected by Row Level Security so that one tenant can never read or modify another's settings. Changes take effect immediately without requiring a deployment or server restart.
 
 ## Settings Categories
 
+Settings are grouped into seven modules. Each module corresponds to a `module` value in the `tenant_settings` table:
+
 <CardGroup cols={2}>
-  <Card title="Company Identity" icon="building">
-    Core legal and operational identity: commercial name (`nombre_comercial`), legal name (`razon_social`), tax ID (`nit`), address, city, country, main phone, corporate email, and website URL.
+  <Card title="EMPRESA — Company Identity" icon="building">
+    Core legal and operational identity: `nombre_comercial`, `razon_social`, `nit`, `regimen`, `direccion`, `ciudad`, `departamento`, `pais`, `codigo_postal`, `web`, `email_corporativo`, `telefono_principal`, `telefono_secundario`, `whatsapp_principal`, `whatsapp_soporte`, `whatsapp_ventas`, `telegram_chat_id`, `horario_laboral_inicio`, `horario_laboral_fin`.
   </Card>
-  <Card title="Branding" icon="palette">
-    Logo URLs for light and dark themes, favicon, PDF header logo, primary and secondary colors, and font configuration. These values are loaded by the White Label system at runtime. See the White Label concept guide for full details.
+  <Card title="LOCALIZACION — Regional Settings" icon="globe">
+    Regional preferences: `zona_horaria`, `idioma`, `moneda`, `formato_fecha`, `formato_hora`, `separador_decimal`, `separador_miles`.
   </Card>
-  <Card title="Approval Workflows" icon="check-double">
-    Minimum quote value that triggers a mandatory approval step, multi-level approver chains by role, and escalation rules for time-sensitive approvals.
+  <Card title="IDENTIDAD — Branding and Visual" icon="palette">
+    Logo URLs (`logo_claro_url`, `logo_oscuro_url`, `logo_login_url`, `logo_pdf_url`, `favicon_url`, `splash_url`, `loader_url`, `icono_movil_url`), color tokens (`color_primario`, `color_secundario`, `color_exito`, `color_warning`, `color_danger`, `color_info`), and typography settings (`tipografia_principal`, `border_radius`, `sombras`, `animaciones`). These values are loaded by the White Label system at runtime.
   </Card>
-  <Card title="Document Sequences" icon="hashtag">
-    Auto-numbering prefixes and starting numbers for each document type. Examples: `COT-2026-` for quotes, `OT-2026-` for work orders, `FAC-2026-` for invoices. Sequences are tenant-scoped and increment atomically via database triggers.
+  <Card title="DOCUMENTOS — Document Templates" icon="file-lines">
+    PDF and print configuration: `pie_pagina`, `encabezado`, `firma_url`, `sello_url`, `qr_habilitado`, margin settings (`margen_superior`, `margen_inferior`, `margen_izquierdo`, `margen_derecho`), `numeracion_formato`, `formato_pdf`, `formato_impresion`.
   </Card>
-  <Card title="User Management" icon="users">
-    Invite new users by email, assign base roles (Admin, Sales, Operations, Viewer), and configure per-user permission exceptions that override role defaults for specific modules.
+  <Card title="ERP — System Preferences" icon="sliders">
+    ERP-level metadata and support links: `nombre_sistema`, `version_visible`, `url_soporte`, `email_soporte`, `url_centro_ayuda`, `url_manual_usuario`, `url_politica_privacidad`, `url_terminos`, `url_cookies`.
   </Card>
-  <Card title="Notification Rules" icon="bell">
-    Define which system events trigger notifications, which channels to use (in-app, email, WhatsApp, SMS, Telegram), and which recipients receive each event type. All phone numbers and recipient lists are stored in the database — no hardcoded contact details.
+  <Card title="INTEGRACIONES — External Services" icon="plug">
+    API keys and configuration for email providers, WhatsApp, Telegram, SMS gateways, AI inference services, payment processors, storage buckets, maps, calendar integrations, and webhooks. See the [Integrations module](/modules/integrations) for full details.
+  </Card>
+  <Card title="TELEFONIA — Contact Numbers" icon="phone">
+    All company phone numbers stored individually: sales, support, emergencies, billing, guarantees, admin, manager, technician, WhatsApp, and SMS lines. The database enforces **E.164 international format** (`+573001112233`) for every value.
   </Card>
 </CardGroup>
 
 ## Configuration Storage Model
 
-Settings are persisted in the `tenant_settings` table under the `EMPRESA`, `LOCALIZACION`, `IDENTIDAD`, `DOCUMENTOS`, `ERP`, `INTEGRACIONES`, and `TELEFONIA` modules. Each row is a typed JSONB key-value pair:
+Settings are persisted as JSONB rows in `tenant_settings`. Each row has a `module`, `config_key`, and `config_value`:
 
 ```sql
 -- Example rows from tenant_settings
-module: 'EMPRESA',    config_key: 'nombre_comercial', config_value: '"VentiTech S.A.S."'
-module: 'IDENTIDAD',  config_key: 'color_primario',   config_value: '"#0284c7"'
-module: 'TELEFONIA',  config_key: 'numero_ventas',    config_value: '"+573001112233"'
+module: 'EMPRESA',      config_key: 'nombre_comercial',  config_value: '"VentiTech S.A.S."'
+module: 'LOCALIZACION', config_key: 'zona_horaria',      config_value: '"America/Bogota"'
+module: 'IDENTIDAD',    config_key: 'color_primario',    config_value: '"#0284c7"'
+module: 'DOCUMENTOS',   config_key: 'firma_url',         config_value: '"/assets/firma.png"'
+module: 'TELEFONIA',    config_key: 'numero_ventas',     config_value: '"+573001112233"'
 ```
 
-A database trigger validates the format of each key: color values must match hex, RGB, or HSL patterns; URL values must be absolute URLs, relative paths, or base64 data URIs; phone numbers must conform to E.164 international format.
+A database trigger (`validate_tenant_settings_white_label`) enforces format rules on write:
+- **Color values** (`color_primario`, etc.) must be valid hex (`#RRGGBB`), RGB/RGBA, HSL/HSLA, or a named CSS color.
+- **URL values** (all `*_url` keys) must be absolute URLs, relative paths, or base64 data URIs.
+- **TELEFONIA values** must match E.164 international phone format.
+- **`notification_routes`** (in `INTEGRACIONES`) must be a valid JSON object.
 
-Sensitive credentials (API keys, integration secrets) are encrypted at rest using `pgp_sym_encrypt` via the `handle_tenant_settings_encryption` trigger when `is_encrypted = true`.
+Sensitive credentials — API keys and integration secrets — are encrypted at rest via `pgp_sym_encrypt` using the `handle_tenant_settings_encryption` trigger when `is_encrypted = true`. Decryption occurs transparently inside the `get_tenant_setting()` database function at read time.
 
-## Branding Versioning
+Physical deletion of any settings row is blocked by the `trg_block_physical_settings_delete` trigger. All deactivations must use soft delete (`deleted_at`).
 
-Every time branding settings are saved via `saveTenantBranding()`, the system takes a full snapshot of the active branding configuration and stores it in `tenant_branding_version`. Previous versions can be restored at any point via `restoreBrandingVersion()`.
+## Branding Server Actions
+
+The `src/app/actions/branding.ts` file exports five Next.js Server Actions that manage tenant branding end-to-end:
+
+| Action | Description |
+|---|---|
+| `getTenantBranding(tenantCode?)` | Reads all settings from `EMPRESA`, `LOCALIZACION`, `IDENTIDAD`, and `DOCUMENTOS` modules and merges them with compile-time defaults from `getBrandingDefaults()`. Returns a complete `BrandingConfig` object. |
+| `saveTenantBranding(tenantCode, data, description?)` | Bulk-upserts the provided `BrandingConfig` fields to `tenant_settings`, then immediately takes a full snapshot of the resulting active configuration and stores it in `tenant_branding_version`. |
+| `getBrandingHistory(tenantCode?)` | Returns the list of `BrandingVersion` snapshots ordered by `version_number` descending. |
+| `restoreBrandingVersion(tenantCode, versionId)` | Reads the `config_values` snapshot from `tenant_branding_version`, upserts all keys back to `tenant_settings`, then records a new snapshot documenting the restoration. |
+| `uploadBrandingLogo(tenantCode, fileType, base64Data, fileName, mimeType)` | Uploads a logo or image asset to the `tenant-logos` Supabase Storage bucket and returns the resulting public URL. Accepted types: PNG, JPEG, SVG, GIF, ICO. Max size: 2 MB. |
+
+### Branding Versioning Flow
+
+Every call to `saveTenantBranding()` appends a new immutable row to `tenant_branding_version`. Calling `restoreBrandingVersion()` creates a new version rather than mutating history:
 
 ```
 Version 1 → Version 2 → Version 3 (current)
                 ↑
-         Restore to this version → creates Version 4
+         Restore to Version 2 → creates Version 4
 ```
 
 <Note>
-  Settings changes take effect immediately for server-rendered pages. Branding values cached in the browser's `localStorage` are refreshed automatically on the next full page load, so users may see the old branding for up to one navigation cycle after a change.
+  Branding settings changes take effect immediately for server-rendered pages. Any values cached in the browser's `localStorage` are refreshed on the next full page load, so users may see the previous branding for up to one navigation cycle after a change.
 </Note>
 
 ## Advanced Admin (Phase 34)
 
-The following capabilities are planned for Phase 34 and extend the base Settings module:
+Phase 34 extends the Settings module with two new capabilities backed by dedicated tables:
 
 <CardGroup cols={2}>
-  <Card title="Role Cloning" icon="copy">
-    Duplicate an existing role with all its permission assignments as a starting point for a new custom role.
+  <Card title="Custom Field Definitions" icon="table-columns">
+    Administrators can define dynamic extra fields (`custom_field_definitions`) for any of seven entity types: `CLIENT`, `REQUIREMENT`, `QUOTE`, `JOB`, `INVOICE`, `WARRANTY`, `USER`. Each field has a `field_type` (`TEXT`, `NUMBER`, `DATE`, `LIST`, `FILE`, `BOOLEAN`, `JSON`), an optional `is_required` flag, and — for `LIST` fields — a validated `options` array. The `validate_entity_custom_fields` trigger enforces schema compliance on every write to the target entity tables.
   </Card>
-  <Card title="Bulk Permission Editing" icon="table-list">
-    Apply or revoke a permission across multiple users or roles in a single operation.
-  </Card>
-  <Card title="Session Management" icon="shield">
-    View active user sessions, force logout from specific devices, and configure session expiry policies per role.
-  </Card>
-  <Card title="Audit Log Queries" icon="magnifying-glass">
-    Search and export the immutable `audit_log` table with filters by user, entity type, date range, and operation type.
+  <Card title="Automation Rules" icon="bolt-lightning">
+    The `automation_rules` table stores event-driven rules in the form `IF event_type → DO action_type`. Supported actions are `DISPATCH_NOTIFICATION`, `CREATE_TASK`, and `WRITE_LOG`. The `execute_automation_rules()` database function evaluates all active rules for a tenant when a business event fires.
   </Card>
 </CardGroup>
+
+Phase 34 also adds profile columns to the `users` table: `avatar_url`, `preferred_language`, `preferred_theme`, `signature_url`, `timezone`, and `home_page`.
+
+## Access Control
+
+Only users with the `ADMINISTRADOR_TENANT`, `GERENTE`, or `GERENTE_GENERAL` role can write to `tenant_settings`. All other authenticated users can read public settings (`is_public = true`) scoped to their own tenant. Platform super-admins have full cross-tenant access.
 
 ## Dashboard URL
 
@@ -83,4 +108,4 @@ The following capabilities are planned for Phase 34 and extend the base Settings
 /dashboard/settings?tenant=<code>
 ```
 
-The settings panel is organized into tabs matching the six categories above. Only users with the `ADMIN` role can access the Settings module by default.
+The settings panel is organized into tabs matching the seven module categories above.

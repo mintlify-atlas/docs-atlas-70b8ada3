@@ -73,7 +73,7 @@ This guide walks you through spinning up a fully functional local instance of B2
 
     **Option B — Supabase Dashboard SQL Editor:**
 
-    Navigate to your project's SQL Editor and run each file from `supabase/migrations/` in ascending filename order (migrations are prefixed with a timestamp, e.g. `20260501000001_...sql`).
+    Navigate to your project's SQL Editor and run each file from `supabase/migrations/` in ascending filename order (migrations are prefixed with a timestamp, e.g. `20260617000001_seed_master_data.sql`).
 
     <Note>
       Migrations must be applied in strict chronological order. Later migrations reference tables, functions, and RLS policies created by earlier ones. Skipping or reordering files will cause foreign-key or policy errors.
@@ -81,7 +81,7 @@ This guide walks you through spinning up a fully functional local instance of B2
   </Step>
 
   <Step title="Start the development server">
-    Launch the Next.js development server with Turbopack.
+    Launch the Next.js development server.
 
     ```bash
     npm run dev

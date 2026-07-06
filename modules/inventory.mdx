@@ -1,7 +1,7 @@
 ---
-title: "Inventory Module: SKU Catalog, Stock Movements, and Purchases"
+title: "Inventory: Warehouses, Stock Movements, and Purchase Orders"
 sidebarTitle: "Inventory"
-description: "Manage product SKUs, track stock levels with full movement history, create purchase orders, and link inventory consumption to work orders."
+description: "Manage product SKUs, track warehouse stock with full movement history, process purchase orders, and link inventory consumption to field work orders."
 ---
 
 The Inventory module gives B2B Import ERP a complete view of physical assets — from the product catalog through real-time stock levels to the full history of every item that ever entered or left a warehouse. It integrates tightly with the Jobs module (field technicians consume materials) and with the Purchases sub-area (suppliers replenish stock via purchase orders). All operations are warehouse-scoped, multi-tenant isolated, and backed by immutable audit logs.
@@ -108,7 +108,7 @@ Movements in `Aplicado` or `Anulado` state are fully immutable. Any attempt to m
 |---|---|---|
 | `Entrada` | Increases `quantity` in warehouse | Triggers weighted-average cost recalculation |
 | `Salida` | Decreases `quantity` in warehouse | `job_id` is **required**; auto-fills `unit_cost` from `average_cost` |
-| `Ajuste` | Positive or negative stock correction | Restricted to `JEFE_INVENTARIO` / Gerencia |
+| `Ajuste` | Positive or negative stock correction | Restricted to `ADMIN_EMPRESA` / `DIR_OPERACIONES` |
 | `Reserva` | Increases `reserved_quantity` | Decreases `available_quantity` without affecting physical stock |
 | `Transferencia` | Moves stock between two warehouses | Requires `source_warehouse_id` ≠ `destination_warehouse_id` |
 
@@ -236,12 +236,12 @@ These events feed the Alerts module, which can distribute notifications by email
 
 | Permission | Roles |
 |---|---|
-| `items.manage` (catalog CRUD) | `JEFE_INVENTARIO`, `GERENTE`, `GERENTE_GENERAL` |
-| `warehouses.manage` | `JEFE_INVENTARIO`, `GERENTE`, `GERENTE_GENERAL` |
-| `inventory.movement` (Entrada, Salida, Reserva) | `ALMACENISTA`, `JEFE_INVENTARIO`, `GERENTE`, `GERENTE_GENERAL` |
-| `inventory.adjustment` (Ajuste, Transferencia) | `JEFE_INVENTARIO`, `GERENTE`, `GERENTE_GENERAL` |
-| `inventory.approve` (Registrado → Aplicado) | `JEFE_INVENTARIO`, `GERENTE`, `GERENTE_GENERAL` |
-| `inventory.view` | All internal roles; `AUDITOR` can see soft-deleted records |
+| `items.manage` (catalog CRUD) | `ADMIN_EMPRESA`, `DIR_OPERACIONES` |
+| `warehouses.manage` | `ADMIN_EMPRESA`, `DIR_OPERACIONES` |
+| `inventory.movement` (Entrada, Salida, Reserva) | `ADMIN_EMPRESA`, `DIR_OPERACIONES`, `TECNICO_CAMPO` |
+| `inventory.adjustment` (Ajuste, Transferencia) | `ADMIN_EMPRESA`, `DIR_OPERACIONES` |
+| `inventory.approve` (Registrado → Aplicado) | `ADMIN_EMPRESA`, `DIR_OPERACIONES` |
+| `inventory.view` | `ADMIN_EMPRESA`, `GERENTE_GENERAL`, `DIR_COMERCIAL`, `EJECUTIVO_COM`, `DIR_OPERACIONES`, `TECNICO_CAMPO`, `AUDITOR` |
 
 ---
 

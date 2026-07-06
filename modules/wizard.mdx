@@ -1,7 +1,7 @@
 ---
-title: "Pre-Engineering Wizard: Public CFM Calculator and Lead Intake"
+title: "Pre-Engineering Wizard: CFM Calculator and Lead Intake"
 sidebarTitle: "Wizard"
-description: "The public wizard guides visitors through industrial ventilation requirements, calculates required CFM and pricing estimates, and creates a lead in the ERP automatically."
+description: "Public pre-engineering tool that calculates CFM, estimates pricing, and automatically registers a scored lead in the ERP from unauthenticated visitors."
 ---
 
 The Pre-Engineering Wizard is a public-facing tool available at `/wizard` that allows industrial prospects to self-qualify their ventilation needs before ever speaking to a sales engineer. Visitors input their space dimensions and environment type, the system performs deterministic aerodynamic calculations in real time, and the result is a diagnostic report — complete with required CFM, equipment category, price estimate, and a materials recommendation — that is simultaneously stored as a scored lead in the ERP.
@@ -122,11 +122,8 @@ The materials recommendation is derived deterministically from the `environment`
   <Card title="data_center" icon="server">
     Air injection system with EPA/HEPA particle filters and acoustic vibration-dampening control.
   </Card>
-  <Card title="warehouse / default" icon="warehouse">
+  <Card title="warehouse / default / other" icon="warehouse">
     Multipurpose extractor or high-capacity axial fan with 22-gauge galvanized steel ductwork.
-  </Card>
-  <Card title="other" icon="gear">
-    Standard multipurpose axial extractor with galvanized steel ductwork; custom spec after on-site visit.
   </Card>
 </CardGroup>
 

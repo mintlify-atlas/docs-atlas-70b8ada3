@@ -4,17 +4,33 @@ sidebarTitle: "Introduction"
 description: "B2B Import ERP is a modular multi-tenant ERP for industrial B2B companies, covering the full lifecycle from lead capture to invoicing with RLS-based tenant isolation."
 ---
 
-B2B Import ERP is a production-grade, modular enterprise resource planning platform built for industrial B2B companies. It covers the complete commercial and operational lifecycle — from initial lead capture and technical pre-engineering wizards, through quoting, approvals, and job execution, all the way to invoicing, payment tracking, and post-sale warranties. The platform is architected as a true multi-tenant SaaS: every record is scoped to a `tenant_id` enforced at the PostgreSQL Row Level Security (RLS) layer, making it suitable for agencies, resellers, or ISVs who need to serve multiple independent clients from a single deployment.
+B2B Import ERP is a production-grade, modular enterprise resource planning platform built for industrial B2B companies — specifically ventilation, HVAC, and industrial engineering firms. It covers the complete commercial and operational lifecycle: from initial lead capture and technical pre-engineering wizards, through quoting, multi-level approvals, and job execution, all the way to invoicing, Wompi payment processing, and post-sale warranties. The platform is architected as a true multi-tenant SaaS — every record is scoped to a `tenant_id` enforced at the PostgreSQL Row Level Security (RLS) layer, making it suitable for agencies, resellers, or ISVs who need to serve multiple independent clients from a single Next.js deployment.
 
 ## What B2B Import ERP Covers
 
 The platform is organized around three major areas of business operations:
 
-- **Multi-Tenant SaaS Core** — Tenant provisioning, white-label branding, user and role management (RBAC), site and area structures, and a full audit trail on every critical state change.
-- **Commercial Lifecycle** — CRM leads, client profiles, technical requirements, itemized quotes with multi-level approval workflows, and a public-facing interactive pre-engineering wizard for prospect qualification.
-- **Operations & Finance** — Work order (job) management, inventory stock control with warehouse movements, electronic invoicing, payment reconciliation, and warranty claim tracking.
+- **Multi-Tenant SaaS Core** — Tenant provisioning, white-label branding (logo, colors, domain — zero code changes), user and role management (RBAC), site and area hierarchies, and a full audit trail on every critical state change.
+- **Commercial Lifecycle** — CRM leads with scoring (`CALIENTE` / `TIBIO` / `FRÍO` / `SPAM`), B2B client profiles, technical requirements, itemised quotes with multi-level approval workflows, and a public-facing interactive pre-engineering wizard (`WizardStepper`) for prospect qualification and CFM calculations.
+- **Operations & Finance** — Work order (job) management, multi-warehouse inventory stock control with movement history, electronic invoicing, Wompi payment gateway integration with webhook processing, and post-sale warranty claim tracking.
 
-Every tenant receives its own isolated data partition and can configure its own brand colors, logo, and domain through the white-label settings panel — no code change required.
+Every tenant receives its own isolated data partition and can configure its own brand colors, logo, and domain through the white-label settings panel — no code change or redeployment required.
+
+## Roles and Access Control
+
+The platform ships with nine pre-defined roles modelled in a full RBAC matrix. Every permission is evaluated at runtime through a three-tier cascade: role defaults → per-user exceptions (`user_permissions` table) → site-level restrictions.
+
+| Role | Scope |
+|---|---|
+| `SUPER_ADMIN` | Platform-wide — tenant provisioning, global audit |
+| `ADMIN_EMPRESA` | Full tenant admin — users, settings, all modules |
+| `GERENTE_GENERAL` | Multi-site visibility — approvals, finance, ops |
+| `DIR_COMERCIAL` | Commercial director — quotes, clients, approvals |
+| `EJECUTIVO_COM` | Sales executive — CRM, quotes, requirements |
+| `DIR_OPERACIONES` | Operations director — jobs, inventory, field ops |
+| `TECNICO_CAMPO` | Field technician — job execution, inventory movements |
+| `AUDITOR` | Read-only audit access across commercial and finance |
+| `CLIENTE` | Client portal — own quotes, invoices, documents |
 
 ## Technology Choices
 
@@ -33,6 +49,7 @@ B2B Import ERP is built on a deliberately minimal, high-leverage stack chosen fo
 | Charts | Recharts |
 | PDF Export | jsPDF (dynamic import, client-side) |
 | Excel Export | XLSX |
+| Payments | Wompi payment gateway (webhook at `/api/webhooks/wompi`) |
 
 ## Architecture Pillars
 

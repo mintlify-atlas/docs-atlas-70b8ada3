@@ -1,7 +1,7 @@
 ---
 title: "Role-Based Access Control: 9 Roles and Permission Matrix"
 sidebarTitle: "RBAC"
-description: "B2B Import ERP enforces access through 9 predefined roles. Permission checks cascade from role assignment through user exceptions and site-level restrictions."
+description: "B2B Import ERP uses 9 predefined roles for access control. Permissions cascade from role to per-user exceptions and multi-site restrictions."
 ---
 
 B2B Import ERP ships with nine predefined system roles that cover every actor in a B2B industrial services operation — from platform-wide administrators down to end-clients browsing their own portal. Roles are assigned per user at the tenant level, and access is resolved at runtime through a three-stage cascade that accounts for per-user exceptions and multi-site restrictions. No user gains access to a module simply by being logged in; every action is gated by an explicit permission code tied to the user's role.
@@ -138,10 +138,6 @@ Only `SUPER_ADMIN` and `ADMIN_EMPRESA` can manage `user_permissions` rows (`user
 
 ---
 
-## Full System Role Catalogue
+## Custom Roles
 
-The platform defines 26 role codes in total (used for custom role creation and fine-grained staffing hierarchies). The nine documented above are the **active roles** shipped by default. The complete catalogue includes:
-
-`SUPER_ADMIN` · `ADMIN_EMPRESA` · `GERENTE_GENERAL` · `DIRECTOR_OPERACIONES` · `DIRECTOR_COMERCIAL` · `DIRECTOR_FINANCIERO` · `JEFE_PROYECTOS` · `JEFE_MANTENIMIENTO` · `JEFE_INVENTARIO` · `JEFE_COMPRAS` · `JEFE_CARTERA` · `JEFE_CALIDAD` · `EJECUTIVO_COMERCIAL` · `INGENIERO_COMERCIAL` · `INGENIERO_PROYECTOS` · `COORDINADOR_OPERACIONES` · `TECNICO_CAMPO` · `ALMACENISTA` · `AUXILIAR_INVENTARIO` · `AUXILIAR_CARTERA` · `AUXILIAR_ADMINISTRATIVO` · `CONTADOR` · `AUDITOR` · `CLIENTE` · `PROVEEDOR` · `INVITADO`
-
-Custom roles created within a tenant have a non-`NULL` `tenant_id` in the `roles` table. System-level global roles carry `tenant_id = NULL`.
+Tenants may create additional roles beyond the nine system defaults. Custom roles are stored with a non-`NULL` `tenant_id` in the `roles` table, scoping them to the creating tenant. System-level global roles carry `tenant_id = NULL` and are available to all tenants. Custom roles participate in the same three-stage permission resolution cascade as system roles.

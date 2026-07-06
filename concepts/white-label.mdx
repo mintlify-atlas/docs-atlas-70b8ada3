@@ -1,7 +1,7 @@
 ---
 title: "White-Label Configuration: Per-Tenant Branding and Identity"
 sidebarTitle: "White Label"
-description: "Every visual and textual element in B2B Import ERP is configurable per tenant: logos, color palette, typography, PDF headers, email templates, and portal names."
+description: "Every element in B2B Import ERP is configurable per tenant: logos, color palette, typography, PDF headers, email templates, and portal names."
 ---
 
 B2B Import ERP is designed to be deployed under any company's identity without touching a single line of source code. Every tenant sees their own logo, color scheme, typography, ERP name, client portal name, browser title, email templates, and PDF headers. Company A can run it as "Siemens ERP", Company B as "ABB Service Cloud", and Company C under their own brand — all from the same codebase, configured entirely through the `tenant_settings` database table. Hardcoding any brand asset or color value directly into a component is explicitly forbidden by the platform constitution.
@@ -57,6 +57,7 @@ All URLs support absolute HTTPS paths, root-relative paths, or Base64-encoded da
 | `splash_url`      | Loading splash screen image              |
 | `loader_url`      | Animated loader / spinner asset          |
 | `icono_movil_url` | PWA home-screen icon                     |
+| `whatsapp`        | WhatsApp contact number or URL           |
 
 ### Color Palette
 
@@ -129,7 +130,7 @@ export interface BrandingConfig {
   email_corporativo: string;
   web: string;
 
-  // Localization
+  // Localizacion
   zona_horaria: string;
   idioma: string;
   moneda: string;
@@ -240,6 +241,22 @@ Input formats accepted:
 | Hex (6-digit)             | `"#0284c7"`           | `"199 89% 48%"`       |
 | Hex (3-digit)             | `"#09c"`              | Expanded + converted  |
 | Fallback (unrecognized)   | `"rebeccapurple"`     | `"240 5.9% 10%"`      |
+
+### `formatColorForDb()` — Database Serialization
+
+The companion function `formatColorForDb()` from `src/utils/tenant.ts` converts a space-separated HSL channels string back into the `hsl(H, S%, L%)` CSS function format required to satisfy the `validate_tenant_settings_white_label` trigger's format constraint:
+
+```ts
+/**
+ * Formats any space-separated HSL channels representation "H S% L%" into
+ * database-valid "hsl(H, S%, L%)" format to satisfy validation constraints.
+ */
+export function formatColorForDb(color: string): string
+```
+
+**Example:** `formatColorForDb("199 89% 48%")` → `"hsl(199, 89%, 48%)"`.
+
+Use this function when persisting a color value from the branding settings form back to the `tenant_settings` table.
 
 ---
 

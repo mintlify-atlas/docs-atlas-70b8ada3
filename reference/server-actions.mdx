@@ -1,7 +1,7 @@
 ---
-title: "Server Actions Reference: All Available Next.js Server Functions"
+title: "Server Actions Reference: Next.js Server Functions"
 sidebarTitle: "Server Actions"
-description: "Complete reference for all Next.js Server Actions in B2B Import ERP. Each action is typed, tenant-scoped, and runs with service-role credentials on the server."
+description: "Reference for every Next.js Server Action in B2B Import ERP. Actions are typed, tenant-scoped, and run with service-role credentials on the server."
 ---
 
 Next.js Server Actions (introduced in Next.js 14 and stabilised in 16) let you define async functions that run exclusively on the server and can be called directly from React components without building a separate API layer. In B2B Import ERP every Server Action is declared with the `"use server"` directive, resolves the caller's tenant via `getTenantId()`, and performs all database mutations through `supabaseAdmin` — the Supabase service-role client — so that Row-Level Security is never a bottleneck for trusted back-end operations.
@@ -30,7 +30,7 @@ export async function getTenantId(tenantCode?: string | null): Promise<string> {
   if (tenantCode === "apex") {
     return "b0000000-0000-0000-0000-000000000000";
   }
-  return "a0000000-0000-0000-0000-000000000000"; // default → AeroMax / acme
+  return "a0000000-0000-0000-0000-000000000000"; // default → acme
 }
 ```
 
@@ -112,6 +112,257 @@ export async function createClient(
 </ParamField>
 
 **Throws** `"Ya existe un cliente con este RFC para este tenant."` when the `tax_id` already exists.
+
+---
+
+## Jobs
+
+Actions live in `src/app/actions.ts`.
+
+### `getJobs`
+
+Returns all work orders for the tenant, ordered newest-first. Priority and status values are mapped to display-friendly labels.
+
+```ts
+export async function getJobs(
+  tenantCode?: string | null
+): Promise<JobRow[]>
+```
+
+<ParamField path="tenantCode" type="string | null | undefined">
+  Tenant slug.
+</ParamField>
+
+**Returns** an array shaped as:
+
+```ts
+{
+  id: string;
+  code: string;           // job_code
+  description: string;    // title
+  assignedTech: string;   // display name derived from tenant
+  priority: "BAJA" | "MEDIA" | "ALTA";
+  startDate: string;      // YYYY-MM-DD
+  endDate: string;        // YYYY-MM-DD
+  status: "PENDIENTE" | "EN_PROGRESO" | "COMPLETADA" | "CANCELADA";
+}
+```
+
+---
+
+### `createJob`
+
+Creates a new work order, auto-generating a `JOB-2026-XXX` code and resolving default client, requirement, site, and area references from the tenant.
+
+```ts
+export async function createJob(
+  tenantCode: string | null,
+  jobData: {
+    description: string;
+    assignedTech: string;
+    priority: string;
+    startDate: string;
+    endDate: string;
+  }
+): Promise<Job>
+```
+
+<ParamField path="jobData.description" type="string" required>
+  Work order description (also used as `title`; truncated to 100 chars).
+</ParamField>
+
+<ParamField path="jobData.priority" type="string" required>
+  `"ALTA"`, `"MEDIA"`, or `"BAJA"`.
+</ParamField>
+
+<ParamField path="jobData.startDate" type="string" required>
+  ISO date string for planned start (`YYYY-MM-DD`).
+</ParamField>
+
+<ParamField path="jobData.endDate" type="string" required>
+  ISO date string for planned end (`YYYY-MM-DD`).
+</ParamField>
+
+---
+
+## Inventory
+
+Actions live in `src/app/actions.ts`.
+
+### `getInventoryStock`
+
+Returns all warehouse stock positions for the tenant, joined with warehouse and item metadata.
+
+```ts
+export async function getInventoryStock(
+  tenantCode?: string | null
+): Promise<StockRow[]>
+```
+
+**Returns** an array shaped as:
+
+```ts
+{
+  id: string;             // "{warehouseId}-{itemId}"
+  warehouseCode: string;
+  warehouseName: string;
+  itemCode: string;
+  itemName: string;
+  sku: string;            // alias for itemCode
+  category: string;
+  unit: string;
+  quantity: number;
+  reserved: number;
+  available: number;
+}
+```
+
+---
+
+### `createInventoryMovement`
+
+Creates a stock movement record (`Entrada`, `Salida`, or `Transferencia`) and sets status to `Aplicado`.
+
+```ts
+export async function createInventoryMovement(
+  tenantCode: string | null,
+  movement: {
+    type: "Entrada" | "Salida" | "Transferencia";
+    itemCode: string;
+    quantity: number;
+    notes: string;
+    sourceWarehouse: string;
+    destWarehouse?: string;
+  }
+): Promise<InventoryMovement>
+```
+
+<ParamField path="movement.type" type='"Entrada" | "Salida" | "Transferencia"' required>
+  Movement direction. `Transferencia` requires `destWarehouse`.
+</ParamField>
+
+<ParamField path="movement.itemCode" type="string" required>
+  The `item_code` of the `inventory_items` record.
+</ParamField>
+
+<ParamField path="movement.sourceWarehouse" type="string" required>
+  The `warehouse_code` of the source warehouse.
+</ParamField>
+
+<ParamField path="movement.destWarehouse" type="string">
+  Required when `type` is `"Transferencia"`.
+</ParamField>
+
+**Throws** if the item or warehouse codes cannot be resolved.
+
+---
+
+## Invoices
+
+Actions live in `src/app/actions.ts`.
+
+### `getInvoices`
+
+Returns all invoices for the tenant, newest-first, with the linked client's `legal_name` joined.
+
+```ts
+export async function getInvoices(
+  tenantCode?: string | null
+): Promise<InvoiceRow[]>
+```
+
+**Returns** an array shaped as:
+
+```ts
+{
+  id: string;
+  code: string;           // invoice_code
+  clientName: string;
+  totalAmount: number;
+  paidAmount: number;
+  status: "BORRADOR" | "EMITIDA" | "PARCIALMENTE_PAGADA" | "PAGADA" | "ANULADA";
+  date: string;           // YYYY-MM-DD
+}
+```
+
+---
+
+### `createInvoice`
+
+Creates an invoice header in `EMITIDA` status, adding a single line item for the concept amount. Matches the client by `legal_name`; falls back to the first active client if no match is found.
+
+```ts
+export async function createInvoice(
+  tenantCode: string | null,
+  invoiceData: {
+    clientName: string;
+    concept: string;
+    amount: number;
+  }
+): Promise<Invoice>
+```
+
+<ParamField path="invoiceData.clientName" type="string" required>
+  Legal name of the client. Used to look up `clients.legal_name`.
+</ParamField>
+
+<ParamField path="invoiceData.concept" type="string" required>
+  Line item description.
+</ParamField>
+
+<ParamField path="invoiceData.amount" type="number" required>
+  Total amount in COP. Used as both `subtotal_amount` and `total_amount`.
+</ParamField>
+
+---
+
+## Tenant Settings
+
+Actions live in `src/app/actions.ts`.
+
+### `getTenantSettings`
+
+Fetches all settings for the tenant as a flat key-value map, decrypting any encrypted fields via the `get_tenant_setting` RPC.
+
+```ts
+export async function getTenantSettings(
+  tenantCode?: string | null
+): Promise<Record<string, unknown>>
+```
+
+**Returns** a plain object where each key is a `config_key` and each value is the resolved (and decrypted where applicable) `config_value`.
+
+---
+
+### `updateTenantSettings`
+
+Upserts a single setting key within a given module. If the row exists it is updated; otherwise a new row is inserted.
+
+```ts
+export async function updateTenantSettings(
+  tenantCode: string | null,
+  module: string,
+  key: string,
+  value: unknown,
+  isEncrypted?: boolean
+): Promise<TenantSetting>
+```
+
+<ParamField path="module" type="string" required>
+  Logical grouping: `"EMPRESA"`, `"LOCALIZACION"`, `"IDENTIDAD"`, `"DOCUMENTOS"`, etc.
+</ParamField>
+
+<ParamField path="key" type="string" required>
+  The `config_key` to set (e.g. `"color_primario"`).
+</ParamField>
+
+<ParamField path="value" type="unknown" required>
+  Any JSON-serialisable value.
+</ParamField>
+
+<ParamField path="isEncrypted" type="boolean">
+  Defaults to `false`. When `true`, the value is stored with `is_encrypted = true` and decrypted via RPC on read.
+</ParamField>
 
 ---
 
@@ -198,6 +449,46 @@ export async function createLeadWithScore(
 
 ---
 
+### `submitContactForm`
+
+Registers a lead originating from the B2B landing page contact form, without requiring an existing `clients` record. Scores the lead using `calculateLeadScore` with role `"Otro"`.
+
+```ts
+export async function submitContactForm(
+  tenantCode: string | null,
+  leadData: {
+    name: string;
+    companyName: string;
+    phone: string;
+    email: string;
+    urgency: string;
+    description: string;
+  }
+): Promise<Lead>
+```
+
+<ParamField path="leadData.name" type="string" required>
+  Full name of the contact.
+</ParamField>
+
+<ParamField path="leadData.companyName" type="string" required>
+  Company name — stored in `leads.company_name`.
+</ParamField>
+
+<ParamField path="leadData.urgency" type="string" required>
+  Urgency level fed to `calculateLeadScore`.
+</ParamField>
+
+<ParamField path="leadData.description" type="string" required>
+  Free-text message — stored in `leads.notes`.
+</ParamField>
+
+<Note>
+  This action writes directly to the `leads` table using the extended columns added by migration `20260619000036_fix_leads_schema.sql` (`name`, `company_name`, `phone`, `email`, `urgency`, `lead_score`). Unlike `createLeadWithScore`, no `client_id` or `contact_id` is required.
+</Note>
+
+---
+
 ## Requirements
 
 Actions live in `src/app/actions/requirements.ts`.
@@ -266,6 +557,32 @@ export async function createRequirement(
 
 <ParamField path="reqData.priority" type="string" required>
   Priority level: `"LOW"`, `"MEDIUM"`, or `"HIGH"`.
+</ParamField>
+
+---
+
+### `updateRequirementStatus`
+
+Updates the `status` (and optionally other fields) of an existing requirement. Used to advance requirements through the workflow.
+
+```ts
+export async function updateRequirementStatus(
+  reqId: string,
+  newStatus: string,
+  extra?: Record<string, unknown>
+): Promise<Requirement>
+```
+
+<ParamField path="reqId" type="string" required>
+  UUID of the requirement to update.
+</ParamField>
+
+<ParamField path="newStatus" type="string" required>
+  New status value: `"BORRADOR"`, `"NUEVO"`, `"EN_REVISION"`, `"DIAGNOSTICO"`, `"COTIZACION"`, `"COMPLETADO"`, or `"CANCELADO"`.
+</ParamField>
+
+<ParamField path="extra" type="Record<string, unknown>">
+  Optional additional column values to patch on the same row (e.g. `{ engineering_user_id: "..." }`).
 </ParamField>
 
 ---
@@ -349,6 +666,61 @@ export async function getQuoteItems(
 
 <ParamField path="quoteId" type="string" required>
   UUID of the parent quote.
+</ParamField>
+
+---
+
+### `addQuoteItem`
+
+Adds a single line item to an existing quote.
+
+```ts
+export async function addQuoteItem(
+  tenantCode: string | null,
+  itemData: {
+    quoteId: string;
+    description: string;
+    itemType: string;
+    quantity: number;
+    unitPrice: number;
+    discountAmount: number;
+    taxPercent: number;
+    itemOrder: number;
+  }
+): Promise<QuoteItem>
+```
+
+<ParamField path="itemData.quoteId" type="string" required>
+  UUID of the parent quote.
+</ParamField>
+
+<ParamField path="itemData.itemType" type="string" required>
+  Type label for the line item (e.g. `"PRODUCTO"`, `"SERVICIO"`).
+</ParamField>
+
+<ParamField path="itemData.itemOrder" type="number" required>
+  Integer display order for this line within the quote.
+</ParamField>
+
+---
+
+### `updateQuoteStatus`
+
+Updates the `status` of an existing quote.
+
+```ts
+export async function updateQuoteStatus(
+  quoteId: string,
+  status: string
+): Promise<Quote>
+```
+
+<ParamField path="quoteId" type="string" required>
+  UUID of the quote.
+</ParamField>
+
+<ParamField path="status" type="string" required>
+  New status: `"BORRADOR"`, `"EN_REVISION"`, `"ENVIADA"`, `"APROBADA"`, `"RECHAZADA"`, or `"VENCIDA"`.
 </ParamField>
 
 ---
@@ -512,6 +884,33 @@ After processing, the action calls `revalidatePath("/portal")` and `revalidatePa
 
 ---
 
+### `getPaymentHistory`
+
+Returns the 50 most recent applied payments for the tenant, ordered by payment date descending.
+
+```ts
+export async function getPaymentHistory(
+  tenantCode?: string | null
+): Promise<PaymentHistoryRow[]>
+```
+
+**Returns** an array shaped as:
+
+```ts
+{
+  id: string;
+  code: string;           // payment_code
+  date: string;           // YYYY-MM-DD
+  method: string;         // e.g. "Tarjeta" | "PSE"
+  reference: string;      // reference_number
+  amount: number;
+  status: string;
+  invoiceCode: string;    // joined from invoices.invoice_code
+}
+```
+
+---
+
 ## Catalog
 
 Actions live in `src/app/actions/catalog.ts`.
@@ -572,6 +971,107 @@ interface ProductDetail {
     slug: string;
   };
 }
+```
+
+---
+
+### `addProductImage`
+
+Inserts a media asset record into `media_assets` and links it to a product via `product_images`.
+
+```ts
+export async function addProductImage(
+  tenantCode: string | null,
+  productId: string,
+  image: {
+    fileName: string;
+    filePath: string;
+    fileSize: number;
+    mimeType: string;
+    altText?: string;
+  }
+): Promise<{ asset: MediaAsset; prodImg: ProductImage }>
+```
+
+<ParamField path="productId" type="string" required>
+  UUID of the product to attach the image to.
+</ParamField>
+
+<ParamField path="image.filePath" type="string" required>
+  Supabase Storage path (e.g. `"products/abc123/hero.png"`).
+</ParamField>
+
+---
+
+### `saveProduct`
+
+Creates or updates a product and replaces its specifications in a single operation. Pass `product.id` to update; omit it to insert.
+
+```ts
+export async function saveProduct(
+  tenantCode: string | null,
+  product: {
+    id?: string;
+    productCode: string;
+    name: string;
+    description: string;
+    status: string;
+    seriesId: string;
+    specifications: Record<string, string>;
+  }
+): Promise<{ success: boolean; productId?: string; error?: string }>
+```
+
+<ParamField path="product.seriesId" type="string" required>
+  UUID of the `product_series` record this product belongs to.
+</ParamField>
+
+<ParamField path="product.specifications" type="Record<string, string>" required>
+  Key-value map of technical specifications. Existing specs are deleted and replaced on every save.
+</ParamField>
+
+---
+
+### `deleteProduct`
+
+Soft-deletes a product by setting `deleted_at`.
+
+```ts
+export async function deleteProduct(
+  tenantCode: string | null,
+  productId: string
+): Promise<{ success: boolean; error?: string }>
+```
+
+---
+
+### `saveCategory`
+
+Creates or updates a product category. Pass `category.id` to update; omit it to insert.
+
+```ts
+export async function saveCategory(
+  tenantCode: string | null,
+  category: {
+    id?: string;
+    categoryCode: string;
+    name: string;
+    description: string;
+  }
+): Promise<{ success: boolean; error?: string }>
+```
+
+---
+
+### `deleteCategory`
+
+Soft-deletes a product category by setting `deleted_at`.
+
+```ts
+export async function deleteCategory(
+  tenantCode: string | null,
+  categoryId: string
+): Promise<{ success: boolean; error?: string }>
 ```
 
 ---

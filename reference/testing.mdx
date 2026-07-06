@@ -1,5 +1,5 @@
 ---
-title: "Testing: Module Test Scripts and UAT Procedures"
+title: "Testing: TypeScript Module Scripts and UAT Procedures"
 sidebarTitle: "Testing"
 description: "B2B Import ERP includes TypeScript test scripts for every module. Run them against a seeded development database to validate end-to-end functionality."
 ---
@@ -58,6 +58,27 @@ Every module has a corresponding npm script that maps to a `ts-node` invocation 
 | White Label | `npm run test:white-label` | Per-tenant branding record creation, CSS variable injection for primary/secondary colors, logo URL storage |
 | Integrations | `npm run test:integrations` | External provider connectivity checks (payment gateway sandbox, email provider, storage) |
 | Advanced Admin | `npm run test:advanced-admin` | Role creation, custom permission overrides per tenant, and super-admin privilege boundaries |
+
+## Utility Scripts
+
+Beyond the `npm run test:*` scripts, two standalone utility scripts help with development and database management. They are invoked directly with `ts-node` and do not have `package.json` shortcuts.
+
+| Script | Location | Purpose |
+|---|---|---|
+| `check-catalog.ts` | Repo root | Queries `product_categories`, `product_subcategories`, and `products` tables via `supabaseAdmin` and prints a live summary. Useful for quickly verifying that the product catalog seed was applied correctly. |
+| `combine-migrations.ts` | `scripts/` | Reads every `.sql` file in `supabase/migrations/` in chronological order, concatenates them into a single `supabase_combined_migrations.sql` file at the project root, and prepends a generated header. Use this to produce a full-database snapshot for auditing or external review. |
+
+Run them directly:
+
+```bash
+# Verify product catalog contents against the live database
+ts-node check-catalog.ts
+
+# Combine all migration files into a single SQL snapshot
+ts-node scripts/combine-migrations.ts
+```
+
+Both scripts require `SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY` (or the hardcoded values inside the scripts) to connect to Supabase.
 
 ## Running a Test
 

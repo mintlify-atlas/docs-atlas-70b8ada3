@@ -7,7 +7,7 @@ description: "Every entity in B2B Import ERP follows a strict state machine. Tra
 Every major entity in B2B Import ERP — clients, requirements, quotes, jobs, invoices, and more — has a formally defined lifecycle expressed as a state machine. Instead of allowing free-form status updates, the platform only permits transitions that are explicitly declared in the Master State & Transition Matrix. This design eliminates invalid data states, makes the system auditable, and provides a single authoritative source of truth for business process enforcement.
 
 <Note>
-  All state names are in **Spanish** because B2B Import ERP is built for Spanish-speaking markets in Latin America. State codes stored in the database match the Spanish names exactly (e.g., `"Prospecto"`, `"En Ejecución"`, `"Borrador"`).
+  All state names are in **Spanish** because B2B Import ERP is built for Spanish-speaking markets in Latin America. Database column values use uppercase snake_case codes (e.g., `"BORRADOR"`, `"EN_REVISION"`, `"APROBADA"`, `"RECHAZADA"`, `"VENCIDA"` for quotes), while this document uses human-readable Spanish labels for clarity.
 </Note>
 
 ---

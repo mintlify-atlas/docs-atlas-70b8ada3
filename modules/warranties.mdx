@@ -144,11 +144,11 @@ Clients access their warranties directly at `/portal`. Through the portal they c
 
 ## RBAC Permissions
 
+Warranty and intervention records are access-controlled through Supabase RLS policies. All rows are scoped to `tenant_id`, and the `AUDITOR` role can view soft-deleted records for compliance purposes.
+
 | Permission | Roles |
 |---|---|
 | `warranties.view` | All internal roles; `CLIENTE` via portal (own records only) |
-| `warranties.manage` (create, edit) | `GERENTE`, `GERENTE_GENERAL`, `JEFE_PROYECTOS`, `COORDINADOR_OPERACIONES` |
-| `interventions.manage` | `GERENTE`, `GERENTE_GENERAL`, `JEFE_PROYECTOS`, operations staff |
-| `warranties.cancel` | `GERENTE`, `GERENTE_GENERAL` (requires `cancel_reason`) |
-
-All `warranties` and `warranty_interventions` rows have RLS enabled and are scoped to `tenant_id`. The Auditor role can view soft-deleted records for compliance purposes.
+| `warranties.manage` (create, edit) | `ADMIN_EMPRESA`, `GERENTE_GENERAL`, `DIR_OPERACIONES` |
+| `interventions.manage` | `ADMIN_EMPRESA`, `GERENTE_GENERAL`, `DIR_OPERACIONES`, `TECNICO_CAMPO` |
+| `warranties.cancel` | `ADMIN_EMPRESA`, `GERENTE_GENERAL` (requires `cancel_reason` ≥ 10 characters) |

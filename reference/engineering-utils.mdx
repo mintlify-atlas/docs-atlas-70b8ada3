@@ -1,7 +1,7 @@
 ---
 title: "Engineering Utilities: CFM Calculator and Pricing Engine"
 sidebarTitle: "Engineering Utils"
-description: "Deterministic utilities for industrial ventilation calculations. calculateRequiredCfm computes airflow from room dimensions, estimatePrice generates cost ranges by service type."
+description: "Pure engineering and pricing utilities for B2B Import ERP. Computes CFM airflow, motor power, noise, equipment count, and COP/USD budgetary price ranges."
 ---
 
 B2B Import ERP ships a pure, AI-free engineering calculation engine used across three surfaces: the public wizard form, the CRM diagnostic report, and the internal quoting tool. All functions are deterministic — given the same inputs they always return the same outputs — and carry zero side-effects. They do not call external APIs, touch the database, or require authentication. This makes them trivially testable with standard Jest unit tests.
@@ -55,7 +55,7 @@ export function calculateRequiredCfm(
   | `mecanico` | 20 | MEDIA | Mechanical workshop |
   | `alimentos` | 15 | BAJA | Food processing |
   | `data_center` / `datacenter` | 30 | ALTA | Server rooms |
-  | `mining` | 45 | ALTA | Mining (maps to heavy_plant ACH) |
+  | `mining` | — | — | Not in the ACH map; defaults to 10 ACH. Use `heavy_plant` for mining environments requiring 45 ACH. |
   | `warehouse` / `almacen` | 8 | BAJA | Warehouse / storage |
   | `default` | 10 | BAJA | General purpose |
 </ParamField>
@@ -100,6 +100,56 @@ const result = calculateRequiredCfm(
 <Tip>
   `calculateRequiredCfm` is a thin wrapper around `generateEngineeringReport`, which provides a richer `DetailedEngineeringReport` including power draw (HP and kW), noise level (dBA), equipment count, suggested distribution layout, and investment ranges. Use `generateEngineeringReport` directly when you need the full pre-engineering report.
 </Tip>
+
+---
+
+## `getAchForEnvironment`
+
+Returns the Air Changes per Hour (ACH) rate for a given environment key, falling back to `10` (the `default` value) for unrecognised keys.
+
+```ts
+// src/utils/engineering.ts
+export function getAchForEnvironment(environment: string): number
+```
+
+<ParamField path="environment" type="string" required>
+  An environment key from `ACH_BY_ENVIRONMENT` (see table in `calculateRequiredCfm`). Unknown keys return `10`.
+</ParamField>
+
+**Returns** a `number` — the ACH rate for the environment.
+
+---
+
+## `calculateAirDensity`
+
+Calculates corrected air density (kg/m³) for a given altitude and temperature using the standard pneumatic formula.
+
+```ts
+// src/utils/engineering.ts
+export function calculateAirDensity(
+  altitudeMsnm: number,  // altitude in metres above sea level
+  tempCelsius: number    // ambient temperature in °C
+): number
+```
+
+<ParamField path="altitudeMsnm" type="number" required>
+  Altitude in metres above sea level. `0` = sea level (standard density 1.204 kg/m³ at 20 °C).
+</ParamField>
+
+<ParamField path="tempCelsius" type="number" required>
+  Ambient temperature in °C.
+</ParamField>
+
+**Returns** air density in kg/m³, rounded to 3 decimal places. Lower altitudes and lower temperatures produce higher density values.
+
+### Formula
+
+```
+p0              = 1.204 kg/m³  (standard density at sea level, 20 °C)
+tempCorrection  = 293.15 / (tempCelsius + 273.15)
+altCorrection   = (1 − 2.2557×10⁻⁵ × altitudeMsnm)^5.25588
+airDensity      = p0 × tempCorrection × altCorrection
+```
 
 ---
 

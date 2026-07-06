@@ -1,7 +1,7 @@
 ---
-title: "Jobs Module: Field Service Work Orders and Activity Tracking"
+title: "Jobs: Field Service Work Orders and Activity Tracking"
 sidebarTitle: "Jobs"
-description: "The Jobs module manages field service work orders from scheduling through execution. Technicians log activities, time, materials used, and close orders with sign-off."
+description: "Manage work orders from scheduling through field execution. Technicians log activities, time, and materials. Closure requires a signed delivery note."
 ---
 
 The Jobs module is the operational heart of B2B Import ERP. Every billable or warranty-covered service engagement lives here as a **work order** — a structured record that captures planning dates, the assigned technician, activities performed in the field, materials consumed, and the digital sign-off documents required for closure. Jobs are always traceable to the requirement that originated them and, optionally, to the approved quote that priced the work.
@@ -112,7 +112,6 @@ When technicians use parts or equipment on site, those are recorded as `inventor
 - Deducts stock from the relevant warehouse.
 - Stamps the average cost to the movement.
 - Fires a `JOB_MATERIAL_CONSUMED` business event with quantity and cost details.
-- Generates a corresponding `costs` record against the job for budget tracking.
 
 See the [Inventory module](/modules/inventory) for the full movement lifecycle.
 
@@ -147,10 +146,10 @@ Jobs support structured document attachments through the Documents module. The `
 
 | Permission | Roles |
 |---|---|
-| `jobs.create` (manual) | `GERENTE`, `GERENTE_GENERAL`, `JEFE_PROYECTOS`, `COORDINADOR_OPERACIONES` |
-| `jobs.manage` (edit, reschedule) | All above + `ALMACENISTA` for material recording |
+| `jobs.create` (manual) | `ADMIN_EMPRESA`, `GERENTE_GENERAL`, `DIR_OPERACIONES` |
+| `jobs.manage` (edit, reschedule) | `ADMIN_EMPRESA`, `GERENTE_GENERAL`, `DIR_OPERACIONES`, `TECNICO_CAMPO` |
 | `jobs.view` | All internal roles; `AUDITOR` can view soft-deleted records |
-| `jobs.close` | `GERENTE`, `GERENTE_GENERAL` |
+| `jobs.close` | `GERENTE_GENERAL`, `DIR_OPERACIONES` |
 
 Row Level Security on `jobs` and `job_activities` ensures all reads and writes are scoped to the authenticated user's `tenant_id`.
 
